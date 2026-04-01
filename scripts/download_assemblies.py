@@ -1,7 +1,8 @@
 import argparse
 import csv
-import gzip
+import os
 import sys
+import tempfile
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,21 +13,41 @@ from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util.retry import Retry
 
-def download_assembly(pdb_id: str, session: requests.Session) -> bytes:
-    """Downloads the first biological assembly for a PDB ID via standard static download."""
+def download_and_zip(pdb_id: str, session: requests.Session, zf: zipfile.ZipFile, zip_lock: threading.Lock, tmp_dir: str) -> str:
+    """Downloads the assembly to a temp file and safely appends it to the zip. This avoids RAM bloat."""
     
     # We use the official static download server, which is extremely robust and fast.
     url = f"https://files.rcsb.org/download/{pdb_id.lower()}-assembly1.cif.gz"
     
-    response = session.get(url, timeout=20)
-    
-    if response.status_code == 404:
-        raise ValueError(f"Assembly not found (404)")
+    # We use a temporary file to avoid loading the entire file into RAM.
+    # This prevents Out Of Memory (OOM) freezes.
+    fd, temp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".cif.gz")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            response = session.get(url, timeout=20, stream=True)
+            if response.status_code == 404:
+                raise ValueError("Assembly not found (404)")
+            response.raise_for_status()
+            
+            # Stream directly to disk in chunks to strictly bound memory usage
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+                    
+        file_name = f"{pdb_id.lower()}-assembly1.cif.gz"
         
-    response.raise_for_status()
-    
-    # Return the raw gzipped payload to save CPU and memory
-    return response.content
+        # Write to the zip file in a thread-safe manner.
+        # This implicitly creates backpressure: a worker cannot start
+        # a new download until its current download is safely committed to the ZIP.
+        with zip_lock:
+            zf.write(temp_path, arcname=file_name)
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+            
+    return pdb_id
 
 def download_assemblies(metadata_csv: Path, output_zip: Path, workers: int):
     """
@@ -85,32 +106,28 @@ def download_assemblies(metadata_csv: Path, output_zip: Path, workers: int):
         print(f"Starting parallel downloads. Saving strictly to {output_zip}...")
 
         # Using tqdm for a production-grade, bug-free progress tracker
-        with tqdm(total=pending_total, desc="Downloading", unit="file", dynamic_ncols=True) as pbar:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                future_to_pdb = {
-                    executor.submit(download_assembly, pid, session): pid 
-                    for pid in pending_pdb_ids
-                }
-                
-                for future in as_completed(future_to_pdb):
-                    pdb_id = future_to_pdb[future]
-                    try:
-                        cif_content = future.result()
-                        file_name = f"{pdb_id.lower()}-assembly1.cif.gz"
-                        
-                        with zip_lock:
-                            zf.writestr(file_name, cif_content)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with tqdm(total=pending_total, desc="Downloading", unit="file", dynamic_ncols=True) as pbar:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_to_pdb = {
+                        executor.submit(download_and_zip, pid, session, zf, zip_lock, tmp_dir): pid 
+                        for pid in pending_pdb_ids
+                    }
+                    
+                    for future in as_completed(future_to_pdb):
+                        pdb_id = future_to_pdb[future]
+                        try:
+                            # If this succeeds, the file is already downloaded and zipped via the worker
+                            future.result()
+                            success_count += 1
                             
-                        success_count += 1
-                        
-                    except Exception as e:
-                        fail_count += 1
-                        pbar.write(f"[WARNING] {pdb_id}: {e}")
-                        pass
-                        
-                    finally:
-                        pbar.set_postfix({"Failed/Missing": fail_count})
-                        pbar.update(1)
+                        except Exception as e:
+                            fail_count += 1
+                            pbar.write(f"[WARNING] {pdb_id}: {e}")
+                            
+                        finally:
+                            pbar.set_postfix({"Failed/Missing": fail_count})
+                            pbar.update(1)
 
     print(f"\nFinished! Total downloaded: {success_count - skipped}, Missing/Failed: {fail_count}.")
 
