@@ -31,7 +31,8 @@ The pipeline consists of the following consecutive scripts, strictly implementin
 ### Script 1: PDB Metadata Query
 
 - **Goal**: Hit the RCSB API to fetch PDB entries satisfying specific biological criteria.
-- **Condition**: Retrieve entries with _at least two protein chains_, where at least one chain (the peptide) has a length between **4 and 32 amino acids (inclusive)**.
+- **Condition**: Retrieve entries with _at least two protein chains_, where at least one chain (the peptide) has a length between **4 and 40 amino acids (inclusive)**. 
+    - **Note**: We use a higher upper bound (40) for the initial query to account for terminal caps (like ACE or NH2) that RCSB counts toward length, ensuring we don't accidentally filter out 32-mer peptides.
 - **Output**: Save the matching entries' metadata into a CSV file.
 
 ### Script 2: Biological Assembly Downloader
@@ -44,7 +45,8 @@ The pipeline consists of the following consecutive scripts, strictly implementin
 
 - **Goal**: Read the single ZIP file directly, parse each CIF file using `biopython`, and build the `lmdb` database.
 - **Logic**:
-  1. Iterate over each identified peptide (chain length 4-32 inclusive).
+  1. Iterate over each identified peptide (standard amino acid chain length **4-32 inclusive**).
+     - **Cap Removal**: If a chain contains terminal modifications (e.g., ACE), they must be stripped/ignored to evaluate the core standard amino acid sequence length.
   2. Use `scipy.spatial.KDTree` to detect all atoms within a **2.5 Ångström distance** of the peptide. _(Note: Distance calculations must use all 37 atom coordinates)_.
   3. **Rules for inclusion/skipping**:
      - If nothing is found in the 2.5Å neighborhood: **SKIP the entry**.

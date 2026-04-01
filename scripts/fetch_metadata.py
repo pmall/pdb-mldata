@@ -96,8 +96,8 @@ def main():
     parser.add_argument(
         "--max-length", 
         type=int, 
-        default=32, 
-        help="Maximum sequence length (default: 32)"
+        default=40, 
+        help="Maximum sequence length (default: 40) - room for terminal caps"
     )
     
     args = parser.parse_args()
