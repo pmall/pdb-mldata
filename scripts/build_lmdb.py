@@ -80,19 +80,6 @@ def parse_assemblies(zip_path: Path, csv_path: Path, min_len: int, max_len: int)
                 if e_id not in entity_to_asym:
                     entity_to_asym[e_id] = []
                 entity_to_asym[e_id].append(a_id)
-            
-            # Map of asym_id -> observed sequence from seq_scheme
-            # Extracts the standard residue sequence for each physical chain as defined in the CIF scheme.
-            # Caps and solvent are not included in this scheme.
-            seq_scheme_asyms = ensure_list(mmcif_dict.get("_pdbx_poly_seq_scheme.asym_id", []))
-            seq_scheme_mons = ensure_list(mmcif_dict.get("_pdbx_poly_seq_scheme.mon_id", []))
-            
-            chain_sequences = {}
-            for a_id, mon_id in zip(seq_scheme_asyms, seq_scheme_mons):
-                if a_id not in chain_sequences:
-                    chain_sequences[a_id] = []
-                # Convert 3-letter to 1-letter, default to 'X' for non-standard
-                chain_sequences[a_id].append(AA_3TO1.get(mon_id.upper(), "X"))
 
             # Extract entity polymer definitions
             entity_ids = ensure_list(mmcif_dict.get("_entity_poly.entity_id", []))
@@ -109,18 +96,24 @@ def parse_assemblies(zip_path: Path, csv_path: Path, min_len: int, max_len: int)
                     rejection_reasons[f"Non-polypeptide type"] += 1
                     continue
                     
-                # 2. Extract clean sequence
-                clean_seq = e_seq.replace("\n", "").replace(" ", "").replace("\r", "")
-                seq_len = len(clean_seq)
+                # 2. Extract clean and trimmed sequence
+                # We strip any non-standard characters from the termini to handle caps (ACE, NH2, etc.)
+                raw_seq = e_seq.replace("\n", "").replace(" ", "").replace("\r", "")
                 
-                # 3. Enforce target length bounds
+                # Identify characters to trim (anything not a standard 1-letter AA)
+                non_std_chars = "".join(set(raw_seq) - STANDARD_AAS_1L)
+                trimmed_seq = raw_seq.strip(non_std_chars)
+                seq_len = len(trimmed_seq)
+                
+                # 3. Enforce target length bounds on the trimmed core
                 if not (min_len <= seq_len <= max_len):
                     rejection_reasons["Sequence length out of bounds"] += 1
                     continue
                     
-                # 4. Strict 20 Standard AAs orthography validation
-                if not set(clean_seq).issubset(STANDARD_AAS_1L):
-                    rejection_reasons["Contains non-standard structural elements or 'X'"] += 1
+                # 4. Strict 20 Standard AAs orthography validation on the core
+                # (If there are non-standards in the MIDDLE, we still reject)
+                if not set(trimmed_seq).issubset(STANDARD_AAS_1L):
+                    rejection_reasons["Contains non-standard elements in the core sequence"] += 1
                     continue
                     
                 # Identify physical chains for this entity
@@ -129,24 +122,14 @@ def parse_assemblies(zip_path: Path, csv_path: Path, min_len: int, max_len: int)
                     rejection_reasons["Entity ID not found in struct_asym"] += 1
                     continue
                 
+                # 5. Broadcast to all Physical Chains
+                # Since the entity is valid, all its physical chains share this target sequence.
                 for asym_id in target_asyms:
-                    # 5. Exact Sequence Match
-                    # Compare the physical chain's sequence (from seq_scheme) against the entity sequence.
-                    # We tolerate structural gaps (missing coords), but the sequence identity 
-                    # defined in the file must match the entity.
-                    obs_seq_list = chain_sequences.get(asym_id, [])
-                    obs_seq = "".join(obs_seq_list)
-                    
-                    if obs_seq != clean_seq:
-                        rejection_reasons["Chain sequence mismatch vs Entity"] += 1
-                        continue
-                    
-                    # Valid peptide chain!
                     valid_peptides.append({
                         "pdb_id": pdb_id,
                         "entity_id": e_id,
                         "chain": asym_id,
-                        "sequence": clean_seq,
+                        "sequence": trimmed_seq,
                         "length": seq_len
                     })
                     
