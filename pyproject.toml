@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "biopython>=1.87",
+    "gemmi>=0.7.5",
     "lmdb>=2.2.0",
     "numpy>=2.4.4",
     "requests>=2.33.1",

@@ -47,32 +47,42 @@ The pipeline consists of the following consecutive scripts, strictly implementin
 - **Logic**:
   1. Iterate over each identified peptide (standard amino acid chain length **4-32 inclusive**).
      - **Cap Removal**: If a chain contains terminal modifications (e.g., ACE), they must be stripped/ignored to evaluate the core standard amino acid sequence length.
-  2. Use `scipy.spatial.KDTree` to detect all atoms within a **2.5 Ångström distance** of the peptide. _(Note: Distance calculations must use all 37 atom coordinates)_.
+  2. Use `scipy.spatial.KDTree` to detect all atoms within a **5 Ångström distance** (configurable) of the peptide. _(Note: Distance calculations must use all 37 atoms of the peptide against all atoms in the assembly)_.
   3. **Rules for inclusion/skipping**:
-     - If nothing is found in the 2.5Å neighborhood: **SKIP the entry**.
-     - If there is _any_ non-amino acid residue in the 2.5Å neighborhood: **SKIP the entry**.
-     - If only amino acids are present: **KEEP** the peptide and the parts of all chains within this 2.5Å neighborhood.
+     - If no other chains are found in the 5Å neighborhood: **SKIP**.
+     - If **multiple** unique chains (other than the peptide) are found in the neighborhood: **SKIP**.
+     - If the single matching chain is **not an amino acid chain** (non-polypeptide): **SKIP**.
+  4. **Data Extraction**:
+     - For both peptide and receptor, extract the **full backbone coordinates** (N, CA, C) and residue-level quality metadata (**B-factors**, **occupancy**).
+     - Use `NaN` to represent missing coordinates or metadata in structural gaps.
 - **Schema**:
-  While distance calculations use all 37 atoms, **only the 3 backbone atom coordinates** (N, CA, C) should be saved in the LMDB database. The schema for each LMDB entry must exactly match the following JSON structure:
+  The schema for each LMDB entry must exactly match the following JSON structure:
   ```json
   {
     "pdb_id": "", // PDB identifier
-    "peptide": {
-      "chain": "", // PDB chain ID
-      "taxon_ids": [], // Array of strings for taxonomic compatibility
-      "uniprot_ids": [], // Array of UniProt accession references
-      "sequence": "", // Amino acid sequence
-      "structure": [] // Backbone coordinates only (not the 37 atoms)
-    },
-    "receptor": [
+    "entities": [ // one entry per peptide entity
       {
-        "chain": "", // PDB chain ID
-        "taxon_ids": [], // Array of strings for taxonomic compatibility
-        "uniprot_ids": [], // Array of UniProt accession references
-        "sequence": "", // Amino acid sequence
-        "structure": [] // Backbone coordinates only (not the 37 atoms)
+        "entity_id": "", // the entity id
+        "sequence": "", // the entity sequence
+        "pairs": [ // one entry per peptide chain / receptor pair
+          {
+            "peptide": {
+              "chain": "", // the peptide chain letter
+              "structure": [], // [[[x,y,z], [x,y,z], [x,y,z]], ...] Backbone N, CA, C
+              "b_factors": [], // [val, ...] Average B-factor per residue (N, CA, C)
+              "occupancy": []  // [val, ...] Average occupancy per residue (N, CA, C)
+            },
+            "receptor": {
+              "entity_id": "",
+              "chain": "",
+              "sequence": "",
+              "structure": [], // [[[x,y,z], [x,y,z], [x,y,z]], ...] Backbone N, CA, C
+              "b_factors": [],
+              "occupancy": []
+            }
+          }
+        ]
       }
-      // ... additional chains if applicable
     ]
   }
   ```
