@@ -53,10 +53,11 @@ The pipeline consists of the following consecutive scripts, strictly implementin
      - If **multiple** unique chains (other than the peptide) are found in the neighborhood: **SKIP**.
      - If the single matching chain is **not an amino acid chain** (non-polypeptide): **SKIP**.
   4. **Data Extraction**:
-     - For both peptide and receptor, extract the **full backbone coordinates** (N, CA, C) and residue-level quality metadata (**B-factors**, **occupancy**).
-     - Use `NaN` to represent missing coordinates or metadata in structural gaps.
+     - For both peptide and receptor, extract the **full structure coordinates** using the exact 37-atom AlphaFold nomenclature and residue-level quality metadata (**B-factors**, **occupancy**).
+     - Coordinates and metadata must be serialized to native binary payloads (`.tobytes()`). Coordinates are `float16`, B-factors are `uint8`, and Occupancy is `uint8` (multiplied by 100).
+     - Missing coordinates are represented using `NaN` (`float16`), but for `uint8` arrays (B-factors and occupancy), missing values are explicitly represented with a `255` sentinel value. The entire dataset is then serialized using `msgpack.packb`.
 - **Schema**:
-  The schema for each LMDB entry must exactly match the following JSON structure:
+  The schema for each LMDB entry must exactly match the following JSON structure (with binary byte strings for arrays):
   ```json
   {
     "pdb_id": "", // PDB identifier
@@ -67,18 +68,20 @@ The pipeline consists of the following consecutive scripts, strictly implementin
         "pairs": [ // one entry per peptide chain / receptor pair
           {
             "peptide": {
+              "entity_id": "", // the peptide entity id
               "chain": "", // the peptide chain letter
-              "structure": [], // [[[x,y,z], [x,y,z], [x,y,z]], ...] Backbone N, CA, C
-              "b_factors": [], // [val, ...] Average B-factor per residue (N, CA, C)
-              "occupancy": []  // [val, ...] Average occupancy per residue (N, CA, C)
+              "sequence": "", // the raw chain sequence of this peptide
+              "structure": "<bytes>", // float16 [N, 37, 3] (.tobytes())
+              "b_factors": "<bytes>", // uint8 [N, 37] (.tobytes()), 255 = NaN
+              "occupancy": "<bytes>"  // uint8 [N, 37] (.tobytes()), occupancy*100, 255 = NaN
             },
             "receptor": {
               "entity_id": "",
               "chain": "",
               "sequence": "",
-              "structure": [], // [[[x,y,z], [x,y,z], [x,y,z]], ...] Backbone N, CA, C
-              "b_factors": [],
-              "occupancy": []
+              "structure": "<bytes>", // float16 [N, 37, 3] (.tobytes())
+              "b_factors": "<bytes>", // uint8 [N, 37] (.tobytes()), 255 = NaN
+              "occupancy": "<bytes>"  // uint8 [N, 37] (.tobytes()), occupancy*100, 255 = NaN
             }
           }
         ]

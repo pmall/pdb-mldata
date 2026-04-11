@@ -8,6 +8,7 @@ dependencies = [
     "biopython>=1.87",
     "gemmi>=0.7.5",
     "lmdb>=2.2.0",
+    "msgpack>=1.1.2",
     "numpy>=2.4.4",
     "requests>=2.33.1",
     "scipy>=1.17.1",

@@ -11,7 +11,9 @@ from collections import Counter
 import gzip
 import io
 import json
+import msgpack
 import sys
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Counter as CounterType, Dict, List, Optional, Sequence, Tuple
@@ -45,7 +47,12 @@ THREE_TO_ONE = {
     "VAL": "V",
 }
 STANDARD_AA_NAMES = set(THREE_TO_ONE)
-BACKBONE_ATOMS = ("N", "CA", "C")
+ATOM_TYPES_37 = (
+    "N", "CA", "C", "CB", "O", "CG", "CG1", "CG2", "OG", "OG1", "SG", "CD",
+    "CD1", "CD2", "ND1", "ND2", "OD1", "OD2", "SD", "CE", "CE1", "CE2", "CE3",
+    "NE", "NE1", "NE2", "OE1", "OE2", "CH2", "NH1", "NH2", "OH", "CZ", "CZ2",
+    "CZ3", "NZ", "OXT"
+)
 PEPTIDE_POLYMER_TYPES = (gemmi.PolymerType.PeptideL, gemmi.PolymerType.PeptideD)
 
 # Non-polymer subtypes that are crystallographic solvent/buffer artifacts with no
@@ -170,32 +177,42 @@ def trim_receptor_terminal_caps(
     return core, sequence
 
 
-def extract_backbone(
+def extract_structure(
     residues: Sequence[gemmi.Residue],
-) -> Tuple[List[List[List[float]]], List[float], List[float]]:
-    """Extract N/CA/C coordinates plus residue-level mean B-factor and occupancy."""
+) -> Tuple[bytes, bytes, bytes]:
+    """Extract 37-atom coordinates plus residue-level B-factor and occupancy as bytes."""
     coords = []
     b_factors = []
     occupancy = []
 
     for residue in residues:
-        atom_coords = [[np.nan, np.nan, np.nan] for _ in BACKBONE_ATOMS]
-        atom_b = []
-        atom_occ = []
+        atom_coords = [[np.nan, np.nan, np.nan] for _ in ATOM_TYPES_37]
+        atom_b = [255] * len(ATOM_TYPES_37)
+        atom_occ = [255] * len(ATOM_TYPES_37)
 
         for atom in residue:
-            if atom.name not in BACKBONE_ATOMS:
+            if atom.name not in ATOM_TYPES_37:
                 continue
-            atom_index = BACKBONE_ATOMS.index(atom.name)
+            atom_index = ATOM_TYPES_37.index(atom.name)
             atom_coords[atom_index] = [atom.pos.x, atom.pos.y, atom.pos.z]
-            atom_b.append(atom.b_iso if atom.b_iso is not None else np.nan)
-            atom_occ.append(atom.occ if atom.occ is not None else np.nan)
+            
+            if atom.b_iso is not None:
+                b_val = min(max(0, round(atom.b_iso)), 254) if atom.b_iso >= 0 else 0
+                atom_b[atom_index] = b_val
+                
+            if atom.occ is not None:
+                occ_val = min(max(0, round(atom.occ * 100)), 100)
+                atom_occ[atom_index] = occ_val
 
         coords.append(atom_coords)
-        b_factors.append(float(np.nanmean(atom_b)) if atom_b else np.nan)
-        occupancy.append(float(np.nanmean(atom_occ)) if atom_occ else np.nan)
+        b_factors.append(atom_b)
+        occupancy.append(atom_occ)
+        
+    coords_arr = np.asarray(coords, dtype=np.float16)
+    b_factors_arr = np.asarray(b_factors, dtype=np.uint8)
+    occupancy_arr = np.asarray(occupancy, dtype=np.uint8)
 
-    return coords, b_factors, occupancy
+    return coords_arr.tobytes(), b_factors_arr.tobytes(), occupancy_arr.tobytes()
 
 
 def collect_atom_positions(residues: Sequence[gemmi.Residue]) -> np.ndarray:
@@ -550,12 +567,14 @@ def process_assembly(
                 )
                 continue
 
-            peptide_structure, peptide_b, peptide_occ = extract_backbone(peptide_residues)
-            receptor_structure, receptor_b, receptor_occ = extract_backbone(receptor_residues)
+            peptide_structure, peptide_b, peptide_occ = extract_structure(peptide_residues)
+            receptor_structure, receptor_b, receptor_occ = extract_structure(receptor_residues)
 
             pair = {
                 "peptide": {
+                    "entity_id": entity.name,
                     "chain": subchain_id,
+                    "sequence": peptide_sequence,
                     "structure": peptide_structure,
                     "b_factors": peptide_b,
                     "occupancy": peptide_occ,
@@ -635,6 +654,10 @@ def build_lmdb(
         print(f"Error: {zip_path} not found")
         sys.exit(1)
 
+    if output_path.exists():
+        print(f"Clearing existing database at {output_path}...")
+        shutil.rmtree(output_path)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if skip_log_path is not None:
         skip_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -698,7 +721,7 @@ def build_lmdb(
             progress.set_postfix(ents=total_entities, pairs=total_pairs)
 
             with env.begin(write=True) as txn:
-                txn.put(pdb_id.encode(), json.dumps(data).encode())
+                txn.put(pdb_id.encode(), msgpack.packb(data, use_bin_type=True))
 
     print(f"\nDone: {total_pairs} pairs from {total_entities} entities")
     print(f"Assemblies read: {assemblies_read}")
