@@ -108,6 +108,9 @@ For pipeline script verification:
 - Never manually merge chains or alter data to force entries to fit a mental model.
 - Never make data manipulation decisions silently.
 - Never apply transformations to the raw PDB data structure itself.
+- When a parser is used for a data format, use only data exposed by that parser's parsed objects or documented parser APIs.
+- Do not manually parse raw structured-data fields to rescue missing values when a parser is already responsible for that format.
+- If required data is not available through the parser, stop and ask before adding fallback parsing or inference.
 - Start with hard filters that keep only certain data.
 - Log and study rejection causes before widening filters.
 - Document every change in data strategy in `AGENTS.md` before implementing it.
@@ -238,14 +241,20 @@ Current rules:
 
 - Read assemblies from `data/assemblies.zip`.
 - Skip multi-model entries, including NMR entries.
-- Trim caps from all protein entities.
-- Keep trimmed protein entities as peptide entities when their length is between 4 and 32 amino acids.
-- Keep peptide entities only when the trimmed sequence contains standard amino acids only.
+- Trim common terminal caps from all protein entity sequences and observed protein chain sequences.
+- Keep trimmed protein entities as peptide entities when their normalized entity sequence length is between 4 and 32 amino acids.
+- Keep non-standard amino acids instead of rejecting peptide entities.
+- Normalize sequences only through Gemmi parser APIs.
+- Do not manually parse mmCIF parent fields or infer parent amino acids.
+- Normalize residues that Gemmi cannot convert to a one-letter amino-acid code to `X`.
+- Store exact retained 3-letter residue names alongside normalized entity, peptide-chain, and receptor-chain sequences.
 - For each chain of each peptide entity, use `scipy.spatial.KDTree` to identify all other chains in a 5 Angstrom neighborhood.
 - Water and explicitly defined non-polymer ligand chains do not count as neighbors.
 - If the peptide chain has exactly one meaningful neighboring chain and that chain is a protein chain, save the pair under the peptide entity.
 - Skip entries that do not satisfy these rules.
 - Existing LMDB database folders must be deleted before writing a new LMDB database to avoid errors caused by LMDB upsert behavior.
+- Entity sequences represent the ideal PDB entity sequence, while chain sequences and structures represent observed assembly chains; do not replace entity sequences with chain consensus.
+- Structures are trimmed with their observed chain sequences and store only the 37 AlphaFold amino-acid atom positions. Extra atoms on non-standard amino acids are discarded.
 
 Work in progress:
 

@@ -2,8 +2,8 @@
 PDB Biological Assembly Parser & LMDB Builder.
 
 The identification logic uses mmCIF label subchains end-to-end. We do not
-merge author chains. Terminal non-standard residues are always trimmed from
-both peptide and receptor chains, while internal receptor modifications are kept.
+merge author chains. Common terminal caps are trimmed from entity and chain
+sequences, while internal non-standard residues are retained.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import gzip
 import io
 import shutil
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, Sequence, TypeAlias, TypedDict
 
@@ -41,33 +42,20 @@ class NeighborRecord(TypedDict):
     nonpolymer_subtype: NotRequired[str | list[str] | None]
 
 
-PeptideCore: TypeAlias = tuple[list[gemmi.Residue], int, int, str]
-ReceptorCore: TypeAlias = tuple[list[gemmi.Residue], str]
 ProcessResult: TypeAlias = tuple[str, LmdbEntry] | None
 
-THREE_TO_ONE = {
-    "ALA": "A",
-    "ARG": "R",
-    "ASN": "N",
-    "ASP": "D",
-    "CYS": "C",
-    "GLN": "Q",
-    "GLU": "E",
-    "GLY": "G",
-    "HIS": "H",
-    "ILE": "I",
-    "LEU": "L",
-    "LYS": "K",
-    "MET": "M",
-    "PHE": "F",
-    "PRO": "P",
-    "SER": "S",
-    "THR": "T",
-    "TRP": "W",
-    "TYR": "Y",
-    "VAL": "V",
-}
-STANDARD_AA_NAMES = set(THREE_TO_ONE)
+# These are terminal blocking groups, not modified amino acids; internal matches
+# are retained because only terminal caps should affect sequence offsets.
+COMMON_TERMINAL_CAPS = frozenset(
+    {
+        "ACE",
+        "ACY",
+        "FOR",
+        "NH2",
+        "NME",
+        "NMC",
+    }
+)
 ATOM_TYPES_37 = (
     "N",
     "CA",
@@ -108,6 +96,15 @@ ATOM_TYPES_37 = (
     "OXT",
 )
 PEPTIDE_POLYMER_TYPES = (gemmi.PolymerType.PeptideL, gemmi.PolymerType.PeptideD)
+
+
+@dataclass(frozen=True)
+class NormalizedResidueSpan:
+    sequence: str
+    residue_names: list[str]
+    trim_start: int
+    trim_end: int
+
 
 # Non-polymer subtypes that are crystallographic solvent/buffer artifacts with no
 # biological role in the binding interaction (solvents, buffers, PEG, preservatives,
@@ -210,53 +207,29 @@ def enum_name(value: object) -> str:
     return text
 
 
-def is_standard_amino_acid(residue: gemmi.Residue) -> bool:
-    return residue.name in STANDARD_AA_NAMES
-
-
-def trim_terminal_caps(
-    residues: Sequence[gemmi.Residue],
-) -> tuple[PeptideCore | None, str | None]:
-    """Return the contiguous standard-AA core after trimming terminal caps."""
-    if not residues:
-        return None, "empty_peptide_subchain"
-
-    flags = [is_standard_amino_acid(residue) for residue in residues]
-    if not any(flags):
-        return None, "no_standard_residues_after_trim"
-
-    start = next(i for i, flag in enumerate(flags) if flag)
-    end = len(flags) - 1 - next(i for i, flag in enumerate(reversed(flags)) if flag)
-    core = list(residues[start : end + 1])
-
-    if not core:
-        return None, "no_standard_residues_after_trim"
-    if any(not is_standard_amino_acid(residue) for residue in core):
-        return None, "internal_nonstandard_residue_in_peptide"
-
-    sequence = "".join(THREE_TO_ONE[residue.name] for residue in core)
-    return (core, start, end, sequence), None
-
-
-def trim_receptor_terminal_caps(
-    residues: Sequence[gemmi.Residue],
-) -> ReceptorCore | None:
-    """Always trim terminal non-standard caps, but keep internal modified residues."""
-    if not residues:
+def normalize_residue_names(
+    residue_names: Sequence[str],
+) -> NormalizedResidueSpan | None:
+    if not residue_names:
         return None
 
-    flags = [is_standard_amino_acid(residue) for residue in residues]
-    if not any(flags):
+    start = 0
+    end = len(residue_names) - 1
+    while start <= end and residue_names[start].upper() in COMMON_TERMINAL_CAPS:
+        start += 1
+    while end >= start and residue_names[end].upper() in COMMON_TERMINAL_CAPS:
+        end -= 1
+    if start > end:
         return None
 
-    start = next(i for i, flag in enumerate(flags) if flag)
-    end = len(flags) - 1 - next(i for i, flag in enumerate(reversed(flags)) if flag)
-    core = list(residues[start : end + 1])
-    if not core:
-        return None
-
-    sequence = "".join(THREE_TO_ONE.get(residue.name, "X") for residue in core)
-    return core, sequence
+    trimmed_names = [name.upper() for name in residue_names[start : end + 1]]
+    sequence = gemmi.one_letter_code(trimmed_names)
+    return NormalizedResidueSpan(
+        sequence=sequence,
+        residue_names=trimmed_names,
+        trim_start=start,
+        trim_end=end,
+    )
 
 
 def extract_structure(
@@ -464,12 +437,18 @@ def process_assembly(
         if entity.polymer_type not in PEPTIDE_POLYMER_TYPES:
             continue
 
+        entity_span = normalize_residue_names(entity.full_sequence)
+        if entity_span is None:
+            continue
+        if not (min_len <= len(entity_span.sequence) <= max_len):
+            continue
+
         entity_entry: EntityData = {
             "entity_id": entity.name,
-            "sequence": "",
+            "sequence": entity_span.sequence,
+            "residue_names": entity_span.residue_names,
             "pairs": [],
         }
-        entity_sequence: str | None = None
 
         for subchain_id in entity.subchains:
             subchain = model.get_subchain(subchain_id)
@@ -477,14 +456,15 @@ def process_assembly(
                 continue
 
             residues = list(subchain)
-            peptide_core, _peptide_failure = trim_terminal_caps(residues)
-            if peptide_core is None:
+            peptide_span = normalize_residue_names(
+                [residue.name for residue in residues]
+            )
+            if peptide_span is None:
                 continue
 
-            peptide_residues, trim_start, trim_end, peptide_sequence = peptide_core
-            if not (min_len <= len(peptide_sequence) <= max_len):
-                continue
-
+            peptide_residues = list(
+                residues[peptide_span.trim_start : peptide_span.trim_end + 1]
+            )
             peptide_atoms = collect_atom_positions(peptide_residues)
             neighbor_records, competing_neighbors = analyze_neighbors(
                 peptide_atoms=peptide_atoms,
@@ -526,27 +506,33 @@ def process_assembly(
             if receptor_chain is None:
                 continue
 
-            receptor_core = trim_receptor_terminal_caps(list(receptor_chain))
-            if receptor_core is None:
-                continue
-
-            receptor_residues, receptor_sequence = receptor_core
             receptor_entity_id = subchain_to_entity_id.get(receptor_subchain_id, "")
             if not receptor_entity_id:
                 continue
 
+            receptor_residues = list(receptor_chain)
+            receptor_span = normalize_residue_names(
+                [residue.name for residue in receptor_residues]
+            )
+            if receptor_span is None:
+                continue
+
+            trimmed_receptor_residues = list(
+                receptor_residues[receptor_span.trim_start : receptor_span.trim_end + 1]
+            )
             peptide_structure, peptide_b, peptide_occ = extract_structure(
                 peptide_residues
             )
             receptor_structure, receptor_b, receptor_occ = extract_structure(
-                receptor_residues
+                trimmed_receptor_residues
             )
 
             pair: PairData = {
                 "peptide": {
                     "entity_id": entity.name,
                     "chain": subchain_id,
-                    "sequence": peptide_sequence,
+                    "sequence": peptide_span.sequence,
+                    "residue_names": peptide_span.residue_names,
                     "structure": peptide_structure,
                     "b_factors": peptide_b,
                     "occupancy": peptide_occ,
@@ -554,7 +540,8 @@ def process_assembly(
                 "receptor": {
                     "entity_id": receptor_entity_id,
                     "chain": receptor_subchain_id,
-                    "sequence": receptor_sequence,
+                    "sequence": receptor_span.sequence,
+                    "residue_names": receptor_span.residue_names,
                     "structure": receptor_structure,
                     "b_factors": receptor_b,
                     "occupancy": receptor_occ,
@@ -563,13 +550,7 @@ def process_assembly(
             entity_entry["pairs"].append(pair)
             found_pairs = True
 
-            if entity_sequence is None:
-                entity_sequence = peptide_sequence
-            elif entity_sequence != peptide_sequence:
-                entity_sequence = ""
-
         if entity_entry["pairs"]:
-            entity_entry["sequence"] = entity_sequence or ""
             entry["entities"].append(entity_entry)
 
     if not found_pairs:

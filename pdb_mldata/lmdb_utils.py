@@ -12,6 +12,7 @@ class ChainData(TypedDict):
     entity_id: str
     chain: str
     sequence: str
+    residue_names: list[str]
     structure: BytePayload
     b_factors: BytePayload
     occupancy: BytePayload
@@ -25,6 +26,7 @@ class PairData(TypedDict):
 class EntityData(TypedDict):
     entity_id: str
     sequence: str
+    residue_names: list[str]
     pairs: list[PairData]
 
 
