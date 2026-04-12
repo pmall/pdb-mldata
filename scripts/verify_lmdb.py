@@ -8,7 +8,7 @@ from typing import cast
 import lmdb
 import numpy as np
 
-from lmdb_utils import decode_lmdb_entry
+from pdb_mldata.lmdb_utils import decode_lmdb_entry
 
 DEFAULT_LMDB_PATH = Path("data/pdb_mldata.lmdb")
 

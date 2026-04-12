@@ -4,21 +4,24 @@ This file contains project-specific instructions for AI agents working on this r
 
 ## 1. Code Guidelines
 
-### 1.1 Package Manager
+### 1.1 Package And Tooling
 
 - Always use `uv`.
 - Never use `python` or `pip` directly.
 - Run Python code with `uv run python`.
 - Add or update dependencies only through `uv`.
+- Ruff is the default Python formatter and import cleanup tool.
+- Pyright is the default Python type checker.
 
-### 1.2 Script Structure
+### 1.2 Structure
 
 - Every executable script must define a `main()` function.
 - `main()` must only parse CLI parameters, validate those parameters, and call a separate logic function.
 - Business logic must live outside `main()` in modular, single-purpose functions.
 - Each function must have one clear responsibility.
-- Shared behavior must be moved into reusable library functions when it is used by multiple scripts.
-- Encoding and decoding conventions for LMDB entries must live in one shared library location. Prefer a standard encoder and decoder instead of duplicating serialization logic across scripts.
+- Shared behavior must be moved into reusable library functions when it is used by multiple entrypoints.
+- Reusable library code must live in importable package modules, not in `scripts/`.
+- `scripts/` must contain executable entrypoints only.
 
 ### 1.3 CLI Parameters
 
@@ -50,11 +53,6 @@ This file contains project-specific instructions for AI agents working on this r
 - Prefer clear names over abbreviations.
 - Keep data transformations explicit and local to the step that owns them.
 - Follow the style already established in the repository unless it conflicts with this file.
-- Ruff is the default Python formatter and import cleanup tool.
-- After every Python code update, run `uv run ruff format`.
-- After every Python code update, run `uv run ruff check --fix`.
-- Pyright is the default Python type checker.
-- After every Python code update, run `uv run pyright`.
 
 ### 1.7 Typing
 
@@ -71,9 +69,19 @@ This file contains project-specific instructions for AI agents working on this r
 - Keep edits scoped to the requested behavior.
 - Do not refactor unrelated code opportunistically.
 - Do not silently alter raw PDB data structures to make entries fit expectations.
-- At the end of every coding update, delete dead code and remove useless imports introduced or exposed by the change.
 
-### 1.9 Testing And Script Runs
+### 1.9 Session Acceptance Checklist
+
+At the end of every coding session:
+
+- Delete dead code and remove useless imports introduced or exposed by the change.
+- Run `uv run ruff format`.
+- Run `uv run ruff check --fix`.
+- Run `uv run pyright`.
+- Run `uv run python -m compileall -q scripts main.py pdb_mldata`.
+- Check the diff and confirm it contains only intentional changes.
+
+For pipeline script verification:
 
 - Avoid running full pipeline scripts for testing because they are long-running.
 - When a script supports `--limit`, use `--limit` with a small number of entries for agent-side verification.
@@ -134,6 +142,8 @@ Storage conventions:
 - Occupancy values are multiplied by 100 and stored as `uint8` bytes.
 - The value `255` is the `NaN`/`None` sentinel for `uint8` arrays.
 - Entries are serialized with `msgpack.packb`.
+- Encoding and decoding conventions for LMDB entries must live in `pdb_mldata/lmdb_utils.py`.
+- Use the shared LMDB encoder and decoder instead of duplicating serialization logic in scripts.
 
 The LMDB entry schema is:
 

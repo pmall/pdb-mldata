@@ -22,7 +22,7 @@ import numpy as np
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
-from lmdb_utils import EntityData, LmdbEntry, PairData, encode_lmdb_entry
+from pdb_mldata.lmdb_utils import EntityData, LmdbEntry, PairData, encode_lmdb_entry
 
 DEFAULT_ASSEMBLIES_ZIP = Path("data/assemblies.zip")
 DEFAULT_LMDB_PATH = Path("data/pdb_mldata.lmdb")
