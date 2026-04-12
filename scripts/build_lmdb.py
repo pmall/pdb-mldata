@@ -6,23 +6,44 @@ merge author chains. Terminal non-standard residues are always trimmed from
 both peptide and receptor chains, while internal receptor modifications are kept.
 """
 
+from __future__ import annotations
+
 import argparse
-from collections import Counter
 import gzip
 import io
-import json
-import msgpack
-import sys
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Counter as CounterType, Dict, List, Optional, Sequence, Tuple
+from typing import NotRequired, Sequence, TypeAlias, TypedDict
 
 import gemmi
 import lmdb
 import numpy as np
 from scipy.spatial import KDTree
 from tqdm import tqdm
+
+from lmdb_utils import EntityData, LmdbEntry, PairData, encode_lmdb_entry
+
+DEFAULT_ASSEMBLIES_ZIP = Path("data/assemblies.zip")
+DEFAULT_LMDB_PATH = Path("data/pdb_mldata.lmdb")
+DEFAULT_MIN_LENGTH = 4
+DEFAULT_MAX_LENGTH = 32
+DEFAULT_DISTANCE = 5.0
+
+
+class NeighborRecord(TypedDict):
+    subchain_id: str
+    entity_id: str | None
+    entity_type: str
+    polymer_type: str
+    is_solvent: bool
+    counts_as_competing_receptor: bool
+    nonpolymer_subtype: NotRequired[str | list[str] | None]
+
+
+PeptideCore: TypeAlias = tuple[list[gemmi.Residue], int, int, str]
+ReceptorCore: TypeAlias = tuple[list[gemmi.Residue], str]
+ProcessResult: TypeAlias = tuple[str, LmdbEntry] | None
 
 THREE_TO_ONE = {
     "ALA": "A",
@@ -48,80 +69,141 @@ THREE_TO_ONE = {
 }
 STANDARD_AA_NAMES = set(THREE_TO_ONE)
 ATOM_TYPES_37 = (
-    "N", "CA", "C", "CB", "O", "CG", "CG1", "CG2", "OG", "OG1", "SG", "CD",
-    "CD1", "CD2", "ND1", "ND2", "OD1", "OD2", "SD", "CE", "CE1", "CE2", "CE3",
-    "NE", "NE1", "NE2", "OE1", "OE2", "CH2", "NH1", "NH2", "OH", "CZ", "CZ2",
-    "CZ3", "NZ", "OXT"
+    "N",
+    "CA",
+    "C",
+    "CB",
+    "O",
+    "CG",
+    "CG1",
+    "CG2",
+    "OG",
+    "OG1",
+    "SG",
+    "CD",
+    "CD1",
+    "CD2",
+    "ND1",
+    "ND2",
+    "OD1",
+    "OD2",
+    "SD",
+    "CE",
+    "CE1",
+    "CE2",
+    "CE3",
+    "NE",
+    "NE1",
+    "NE2",
+    "OE1",
+    "OE2",
+    "CH2",
+    "NH1",
+    "NH2",
+    "OH",
+    "CZ",
+    "CZ2",
+    "CZ3",
+    "NZ",
+    "OXT",
 )
 PEPTIDE_POLYMER_TYPES = (gemmi.PolymerType.PeptideL, gemmi.PolymerType.PeptideD)
 
 # Non-polymer subtypes that are crystallographic solvent/buffer artifacts with no
 # biological role in the binding interaction (solvents, buffers, PEG, preservatives,
 # reducing agents, detergents). Treated as solvent: excluded from the neighbor count.
-NONPOLYMER_SOLVENT_SUBTYPES = frozenset({
-    # Organic solvents & cryoprotectants
-    "GOL", "EDO", "DMS", "MPD", "IPA", "EOH", "MOH", "ACN", "DCE", "DIO",
-    "BU3", "TBU", "OCT", "BNZ", "ERY", "CCN", "ETA", "HEX", "OXY",
-    # Buffer inorganic anions
-    "SO4", "PO4", "NO3", "CO3", "ACT", "ACY", "FMT", "NH4", "NH3",
-    "CO2", "AZI", "CIT", "TFA",
-    # Organic buffer molecules
-    "MES", "EPE", "TRS", "IMD", "URE", "B3P", "BTB",
-    # PEG fragments & polyethers
-    "PG4", "PEG", "PGV", "PGE", "1PE", "2PE", "3PE", "PE4", "PE5", "PE8",
-    "P6G", "C8E", "PG0", "PGO", "15P", "16P", "1PG", "PEV", "PEE", "PEF",
-    "PGR", "PGT", "XPE", "P4G", "P3A", "JEF",
-    # Reducing agents
-    "DTT", "BME",
-    # Detergents (crystallization)
-    "LMT",
-    # Preservatives & crystallization additives
-    "IPH", "CRS", "SPM", "SPD", "MLI", "TLA", "ACE", "NH2", "MPO", "TME",
-})
-
-
-
-def make_diagnostic_record(
-    pdb_id: str,
-    entity_id: Optional[str],
-    peptide_subchain_id: Optional[str],
-    status: str,
-    skip_reason_code: Optional[str],
-    skip_reason_detail: Optional[str],
-    peptide: Optional[Dict] = None,
-    neighbors: Optional[List[Dict]] = None,
-    entry_peptide_screen: Optional[Dict] = None,
-) -> Dict:
-    return {
-        "pdb_id": pdb_id,
-        "entity_id": entity_id,
-        "peptide_subchain_id": peptide_subchain_id,
-        "status": status,
-        "skip_reason_code": skip_reason_code,
-        "skip_reason_detail": skip_reason_detail,
-        "peptide": peptide,
-        "neighbors": neighbors or [],
-        "entry_peptide_screen": entry_peptide_screen,
+NONPOLYMER_SOLVENT_SUBTYPES = frozenset(
+    {
+        # Organic solvents & cryoprotectants
+        "GOL",
+        "EDO",
+        "DMS",
+        "MPD",
+        "IPA",
+        "EOH",
+        "MOH",
+        "ACN",
+        "DCE",
+        "DIO",
+        "BU3",
+        "TBU",
+        "OCT",
+        "BNZ",
+        "ERY",
+        "CCN",
+        "ETA",
+        "HEX",
+        "OXY",
+        # Buffer inorganic anions
+        "SO4",
+        "PO4",
+        "NO3",
+        "CO3",
+        "ACT",
+        "ACY",
+        "FMT",
+        "NH4",
+        "NH3",
+        "CO2",
+        "AZI",
+        "CIT",
+        "TFA",
+        # Organic buffer molecules
+        "MES",
+        "EPE",
+        "TRS",
+        "IMD",
+        "URE",
+        "B3P",
+        "BTB",
+        # PEG fragments & polyethers
+        "PG4",
+        "PEG",
+        "PGV",
+        "PGE",
+        "1PE",
+        "2PE",
+        "3PE",
+        "PE4",
+        "PE5",
+        "PE8",
+        "P6G",
+        "C8E",
+        "PG0",
+        "PGO",
+        "15P",
+        "16P",
+        "1PG",
+        "PEV",
+        "PEE",
+        "PEF",
+        "PGR",
+        "PGT",
+        "XPE",
+        "P4G",
+        "P3A",
+        "JEF",
+        # Reducing agents
+        "DTT",
+        "BME",
+        # Detergents (crystallization)
+        "LMT",
+        # Preservatives & crystallization additives
+        "IPH",
+        "CRS",
+        "SPM",
+        "SPD",
+        "MLI",
+        "TLA",
+        "ACE",
+        "NH2",
+        "MPO",
+        "TME",
     }
+)
 
 
-def make_peptide_details(
-    raw_residue_count: int,
-    trimmed_start: Optional[int] = None,
-    trimmed_end: Optional[int] = None,
-    trimmed_sequence: Optional[str] = None,
-    trimmed_length: Optional[int] = None,
-) -> Dict:
-    return {
-        "raw_residue_count": raw_residue_count,
-        "trimmed_start": trimmed_start,
-        "trimmed_end": trimmed_end,
-        "trimmed_sequence": trimmed_sequence,
-        "trimmed_length": trimmed_length,
-    }
-
-
-def enum_name(value) -> str:
+def enum_name(value: object) -> str:
     text = str(value)
     if "." in text:
         return text.split(".")[-1]
@@ -134,7 +216,7 @@ def is_standard_amino_acid(residue: gemmi.Residue) -> bool:
 
 def trim_terminal_caps(
     residues: Sequence[gemmi.Residue],
-) -> Tuple[Optional[Tuple[List[gemmi.Residue], int, int, str]], Optional[str]]:
+) -> tuple[PeptideCore | None, str | None]:
     """Return the contiguous standard-AA core after trimming terminal caps."""
     if not residues:
         return None, "empty_peptide_subchain"
@@ -158,7 +240,7 @@ def trim_terminal_caps(
 
 def trim_receptor_terminal_caps(
     residues: Sequence[gemmi.Residue],
-) -> Optional[Tuple[List[gemmi.Residue], str]]:
+) -> ReceptorCore | None:
     """Always trim terminal non-standard caps, but keep internal modified residues."""
     if not residues:
         return None
@@ -179,7 +261,7 @@ def trim_receptor_terminal_caps(
 
 def extract_structure(
     residues: Sequence[gemmi.Residue],
-) -> Tuple[bytes, bytes, bytes]:
+) -> tuple[bytes, bytes, bytes]:
     """Extract 37-atom coordinates plus residue-level B-factor and occupancy as bytes."""
     coords = []
     b_factors = []
@@ -195,11 +277,11 @@ def extract_structure(
                 continue
             atom_index = ATOM_TYPES_37.index(atom.name)
             atom_coords[atom_index] = [atom.pos.x, atom.pos.y, atom.pos.z]
-            
+
             if atom.b_iso is not None:
                 b_val = min(max(0, round(atom.b_iso)), 254) if atom.b_iso >= 0 else 0
                 atom_b[atom_index] = b_val
-                
+
             if atom.occ is not None:
                 occ_val = min(max(0, round(atom.occ * 100)), 100)
                 atom_occ[atom_index] = occ_val
@@ -207,7 +289,7 @@ def extract_structure(
         coords.append(atom_coords)
         b_factors.append(atom_b)
         occupancy.append(atom_occ)
-        
+
     coords_arr = np.asarray(coords, dtype=np.float16)
     b_factors_arr = np.asarray(b_factors, dtype=np.uint8)
     occupancy_arr = np.asarray(occupancy, dtype=np.uint8)
@@ -227,7 +309,7 @@ def collect_atom_positions(residues: Sequence[gemmi.Residue]) -> np.ndarray:
 
 def build_subchain_entity_map(
     structure: gemmi.Structure,
-) -> Tuple[Dict[str, gemmi.Entity], Dict[str, str]]:
+) -> tuple[dict[str, gemmi.Entity], dict[str, str]]:
     subchain_to_entity = {}
     subchain_to_entity_id = {}
 
@@ -239,7 +321,7 @@ def build_subchain_entity_map(
     return subchain_to_entity, subchain_to_entity_id
 
 
-def build_assembly_atoms(model: gemmi.Model) -> Tuple[np.ndarray, List[str]]:
+def build_assembly_atoms(model: gemmi.Model) -> tuple[np.ndarray, list[str]]:
     all_coords = []
     atom_subchains = []
     seen_subchains = set()
@@ -262,7 +344,7 @@ def build_assembly_atoms(model: gemmi.Model) -> Tuple[np.ndarray, List[str]]:
     return np.asarray(all_coords, dtype=np.float32), atom_subchains
 
 
-def is_amino_acid_receptor(entity: Optional[gemmi.Entity]) -> bool:
+def is_amino_acid_receptor(entity: gemmi.Entity | None) -> bool:
     return bool(
         entity is not None
         and entity.entity_type == gemmi.EntityType.Polymer
@@ -273,8 +355,8 @@ def is_amino_acid_receptor(entity: Optional[gemmi.Entity]) -> bool:
 def classify_neighbor_subchain(
     subchain_id: str,
     peptide_subchain_id: str,
-    subchain_to_entity: Dict[str, gemmi.Entity],
-) -> Dict:
+    subchain_to_entity: dict[str, gemmi.Entity],
+) -> NeighborRecord:
     entity = subchain_to_entity.get(subchain_id)
     entity_id = entity.name if entity is not None else None
     entity_type = enum_name(entity.entity_type) if entity is not None else "Unknown"
@@ -287,7 +369,8 @@ def classify_neighbor_subchain(
         "entity_id": entity_id,
         "entity_type": entity_type,
         "polymer_type": polymer_type,
-        "is_solvent": entity is not None and entity.entity_type == gemmi.EntityType.Water,
+        "is_solvent": entity is not None
+        and entity.entity_type == gemmi.EntityType.Water,
         "counts_as_competing_receptor": counts_as_competing_receptor,
     }
 
@@ -295,11 +378,11 @@ def classify_neighbor_subchain(
 def analyze_neighbors(
     peptide_atoms: np.ndarray,
     tree: KDTree,
-    atom_subchains: List[str],
+    atom_subchains: list[str],
     peptide_subchain_id: str,
-    subchain_to_entity: Dict[str, gemmi.Entity],
-    distance: float
-) -> Tuple[List[Dict], List[str]]:
+    subchain_to_entity: dict[str, gemmi.Entity],
+    distance: float,
+) -> tuple[list[NeighborRecord], list[str]]:
     if peptide_atoms.size == 0:
         return [], []
 
@@ -324,53 +407,26 @@ def analyze_neighbors(
     return neighbor_records, competing
 
 
-def rejection_neighbors(neighbor_records: List[Dict]) -> List[Dict]:
-    return [
-        {
-            "subchain_id": record["subchain_id"],
-            "entity_id": record["entity_id"],
-            "entity_type": record["entity_type"],
-            "polymer_type": record["polymer_type"],
-            "nonpolymer_subtype": record.get("nonpolymer_subtype"),
-            "counts_as_competing_receptor": record["counts_as_competing_receptor"],
-        }
-        for record in neighbor_records
-    ]
-
-
 def choose_receptor_from_neighbors(
-    neighbor_records: List[Dict],
-    competing_neighbors: List[str],
-    distance: float,
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    neighbor_records: list[NeighborRecord],
+    competing_neighbors: list[str],
+) -> str | None:
     if not neighbor_records:
-        return None, "no_neighbors_in_shell", f"No other subchains found within {distance}A of peptide"
+        return None
 
-    non_solvent_neighbors = [record for record in neighbor_records if not record["is_solvent"]]
+    non_solvent_neighbors = [
+        record for record in neighbor_records if not record["is_solvent"]
+    ]
     if not non_solvent_neighbors:
-        return None, "only_solvent_neighbors", f"Only solvent subchains found within {distance}A of peptide"
+        return None
 
     if len(non_solvent_neighbors) > 1:
-        neighbor_types = ", ".join(
-            f"{record['subchain_id']}:{record['entity_type']}/{record['polymer_type']}"
-            for record in non_solvent_neighbors
-        )
-        return (
-            None,
-            "too_many_neighbors",
-            f"{len(non_solvent_neighbors)} non-solvent nearby subchains in {distance}A shell: {neighbor_types}",
-        )
+        return None
 
-    only_neighbor = non_solvent_neighbors[0]
     if len(competing_neighbors) == 0:
-        return (
-            None,
-            "single_neighbor_wrong_type",
-            "Single nearby subchain is not a competing peptide/polymer neighbor: "
-            f"{only_neighbor['subchain_id']}:{only_neighbor['entity_type']}/{only_neighbor['polymer_type']}",
-        )
+        return None
 
-    return competing_neighbors[0], None, None
+    return competing_neighbors[0]
 
 
 def process_assembly(
@@ -379,61 +435,27 @@ def process_assembly(
     min_len: int,
     max_len: int,
     distance: float,
-) -> Tuple[Optional[Tuple[str, Dict]], List[Dict]]:
+) -> ProcessResult:
     pdb_id = filename.split("-")[0].upper()
-    diagnostics = []
-    found_valid_peptide_candidate = False
-    peptide_screen_counts: CounterType[str] = Counter()
-    peptide_polymer_subchains_seen = 0
 
     try:
         with gzip.open(io.BytesIO(zf.read(filename)), "rt") as handle:
             doc = gemmi.cif.read_string(handle.read())
             structure = gemmi.make_structure_from_block(doc[0])
-    except Exception as exc:
-        diagnostics.append(
-            make_diagnostic_record(
-                pdb_id=pdb_id,
-                entity_id=None,
-                peptide_subchain_id=None,
-                status="skipped",
-                skip_reason_code="read_error",
-                skip_reason_detail=str(exc),
-            )
-        )
-        return None, diagnostics
+    except Exception:
+        return None
 
     if len(structure) != 1:
-        diagnostics.append(
-            make_diagnostic_record(
-                pdb_id=pdb_id,
-                entity_id=None,
-                peptide_subchain_id=None,
-                status="skipped",
-                skip_reason_code="multiple_models",
-                skip_reason_detail=f"Structure has {len(structure)} models",
-            )
-        )
-        return None, diagnostics
+        return None
 
     model = structure[0]
     subchain_to_entity, subchain_to_entity_id = build_subchain_entity_map(structure)
     assembly_coords, atom_subchains = build_assembly_atoms(model)
     if assembly_coords.size == 0:
-        diagnostics.append(
-            make_diagnostic_record(
-                pdb_id=pdb_id,
-                entity_id=None,
-                peptide_subchain_id=None,
-                status="skipped",
-                skip_reason_code="no_assembly_atoms",
-                skip_reason_detail="No atoms found across assembly subchains",
-            )
-        )
-        return None, diagnostics
+        return None
 
     tree = KDTree(assembly_coords)
-    entry = {"pdb_id": pdb_id, "entities": []}
+    entry: LmdbEntry = {"pdb_id": pdb_id, "entities": []}
     found_pairs = False
 
     for entity in structure.entities:
@@ -442,38 +464,27 @@ def process_assembly(
         if entity.polymer_type not in PEPTIDE_POLYMER_TYPES:
             continue
 
-        entity_entry = {"entity_id": entity.name, "sequence": "", "pairs": []}
-        entity_sequence = None
+        entity_entry: EntityData = {
+            "entity_id": entity.name,
+            "sequence": "",
+            "pairs": [],
+        }
+        entity_sequence: str | None = None
 
         for subchain_id in entity.subchains:
-            peptide_polymer_subchains_seen += 1
             subchain = model.get_subchain(subchain_id)
             if subchain is None:
-                peptide_screen_counts["missing_subchain"] += 1
                 continue
 
             residues = list(subchain)
-            peptide_core, peptide_failure = trim_terminal_caps(residues)
+            peptide_core, _peptide_failure = trim_terminal_caps(residues)
             if peptide_core is None:
-                peptide_screen_counts[peptide_failure] += 1
                 continue
 
             peptide_residues, trim_start, trim_end, peptide_sequence = peptide_core
-            peptide_details = make_peptide_details(
-                raw_residue_count=len(residues),
-                trimmed_start=trim_start,
-                trimmed_end=trim_end,
-                trimmed_sequence=peptide_sequence,
-                trimmed_length=len(peptide_sequence),
-            )
             if not (min_len <= len(peptide_sequence) <= max_len):
-                if len(peptide_sequence) < min_len:
-                    peptide_screen_counts["length_too_short"] += 1
-                else:
-                    peptide_screen_counts["length_too_long"] += 1
                 continue
 
-            found_valid_peptide_candidate = True
             peptide_atoms = collect_atom_positions(peptide_residues)
             neighbor_records, competing_neighbors = analyze_neighbors(
                 peptide_atoms=peptide_atoms,
@@ -485,9 +496,17 @@ def process_assembly(
             )
             for _rec in neighbor_records:
                 if _rec["entity_type"] == "NonPolymer":
-                    _sc = model.get_subchain(_rec["subchain_id"])
-                    _names = sorted({r.name for r in _sc}) if _sc else []
-                    _rec["nonpolymer_subtype"] = _names[0] if len(_names) == 1 else (_names or None)
+                    neighbor_subchain = model.get_subchain(_rec["subchain_id"])
+                    neighbor_residue_names = (
+                        sorted({residue.name for residue in neighbor_subchain})
+                        if neighbor_subchain
+                        else []
+                    )
+                    _rec["nonpolymer_subtype"] = (
+                        neighbor_residue_names[0]
+                        if len(neighbor_residue_names) == 1
+                        else (neighbor_residue_names or None)
+                    )
             # Flag non-polymer neighbors whose subtype is a known crystallographic
             # solvent artifact — they play no role in binding and should not count
             # as competing neighbors.
@@ -497,80 +516,33 @@ def process_assembly(
                     and _rec.get("nonpolymer_subtype") in NONPOLYMER_SOLVENT_SUBTYPES
                 ):
                     _rec["is_solvent"] = True
-            receptor_subchain_id, neighbor_reason_code, neighbor_reason_detail = choose_receptor_from_neighbors(
+            receptor_subchain_id = choose_receptor_from_neighbors(
                 neighbor_records=neighbor_records,
                 competing_neighbors=competing_neighbors,
-                distance=distance,
             )
             if receptor_subchain_id is None:
-                diagnostics.append(
-                    make_diagnostic_record(
-                        pdb_id=pdb_id,
-                        entity_id=entity.name,
-                        peptide_subchain_id=subchain_id,
-                        status="skipped",
-                        skip_reason_code=neighbor_reason_code,
-                        skip_reason_detail=neighbor_reason_detail,
-                        peptide=peptide_details,
-                        neighbors=rejection_neighbors(neighbor_records),
-                    )
-                )
                 continue
             receptor_chain = model.get_subchain(receptor_subchain_id)
             if receptor_chain is None:
-                diagnostics.append(
-                    make_diagnostic_record(
-                        pdb_id=pdb_id,
-                        entity_id=entity.name,
-                        peptide_subchain_id=subchain_id,
-                        status="skipped",
-                        skip_reason_code="missing_receptor_subchain",
-                        skip_reason_detail=f"Receptor subchain {receptor_subchain_id} not found in model",
-                        peptide=peptide_details,
-                        neighbors=rejection_neighbors(neighbor_records),
-                    )
-                )
                 continue
 
             receptor_core = trim_receptor_terminal_caps(list(receptor_chain))
             if receptor_core is None:
-                diagnostics.append(
-                    make_diagnostic_record(
-                        pdb_id=pdb_id,
-                        entity_id=entity.name,
-                        peptide_subchain_id=subchain_id,
-                        status="skipped",
-                        skip_reason_code="receptor_no_standard_residue_after_trim",
-                        skip_reason_detail=(
-                            f"Receptor subchain {receptor_subchain_id} has no standard residues after trimming"
-                        ),
-                        peptide=peptide_details,
-                        neighbors=rejection_neighbors(neighbor_records),
-                    )
-                )
                 continue
 
             receptor_residues, receptor_sequence = receptor_core
             receptor_entity_id = subchain_to_entity_id.get(receptor_subchain_id, "")
             if not receptor_entity_id:
-                diagnostics.append(
-                    make_diagnostic_record(
-                        pdb_id=pdb_id,
-                        entity_id=entity.name,
-                        peptide_subchain_id=subchain_id,
-                        status="skipped",
-                        skip_reason_code="missing_receptor_entity_id",
-                        skip_reason_detail=f"No entity id found for receptor subchain {receptor_subchain_id}",
-                        peptide=peptide_details,
-                        neighbors=rejection_neighbors(neighbor_records),
-                    )
-                )
                 continue
 
-            peptide_structure, peptide_b, peptide_occ = extract_structure(peptide_residues)
-            receptor_structure, receptor_b, receptor_occ = extract_structure(receptor_residues)
+            peptide_structure, peptide_b, peptide_occ = extract_structure(
+                peptide_residues
+            )
+            receptor_structure, receptor_b, receptor_occ = extract_structure(
+                receptor_residues
+            )
 
-            pair = {
+            pair: PairData = {
                 "peptide": {
                     "entity_id": entity.name,
                     "chain": subchain_id,
@@ -590,18 +562,6 @@ def process_assembly(
             }
             entity_entry["pairs"].append(pair)
             found_pairs = True
-            diagnostics.append(
-                make_diagnostic_record(
-                    pdb_id=pdb_id,
-                    entity_id=entity.name,
-                    peptide_subchain_id=subchain_id,
-                    status="passed",
-                    skip_reason_code=None,
-                    skip_reason_detail=None,
-                    peptide=peptide_details,
-                    neighbors=[],
-                )
-            )
 
             if entity_sequence is None:
                 entity_sequence = peptide_sequence
@@ -612,33 +572,9 @@ def process_assembly(
             entity_entry["sequence"] = entity_sequence or ""
             entry["entities"].append(entity_entry)
 
-    if not found_valid_peptide_candidate:
-        screen_summary = {
-            "polymer_peptide_subchains_seen": peptide_polymer_subchains_seen,
-            "missing_subchain": peptide_screen_counts["missing_subchain"],
-            "empty_peptide_subchain": peptide_screen_counts["empty_peptide_subchain"],
-            "no_standard_residues_after_trim": peptide_screen_counts["no_standard_residues_after_trim"],
-            "internal_nonstandard_residue_in_peptide": peptide_screen_counts["internal_nonstandard_residue_in_peptide"],
-            "length_too_short": peptide_screen_counts["length_too_short"],
-            "length_too_long": peptide_screen_counts["length_too_long"],
-        }
-        diagnostics.append(
-            make_diagnostic_record(
-                pdb_id=pdb_id,
-                entity_id=None,
-                peptide_subchain_id=None,
-                status="skipped",
-                skip_reason_code="no_valid_peptide_in_entry",
-                skip_reason_detail=(
-                    f"No peptide subchain passed terminal-cap trimming and length filter [{min_len}, {max_len}]"
-                ),
-                entry_peptide_screen=screen_summary,
-            )
-        )
-
     if not found_pairs:
-        return None, diagnostics
-    return (pdb_id, entry), diagnostics
+        return None
+    return pdb_id, entry
 
 
 def build_lmdb(
@@ -647,68 +583,26 @@ def build_lmdb(
     min_len: int,
     max_len: int,
     distance: float,
-    limit: Optional[int],
-    skip_log_path: Optional[Path],
+    limit: int | None,
 ) -> None:
-    if not zip_path.exists():
-        print(f"Error: {zip_path} not found")
-        sys.exit(1)
-
     if output_path.exists():
-        print(f"Clearing existing database at {output_path}...")
         shutil.rmtree(output_path)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if skip_log_path is not None:
-        skip_log_path.parent.mkdir(parents=True, exist_ok=True)
     env = lmdb.open(str(output_path), map_size=10**11)
 
     total_pairs = 0
     total_entities = 0
-    assemblies_read = 0
-    entries_with_valid_peptide = 0
-    entries_without_valid_peptide = 0
-    candidate_counter = 0
-    accepted_candidate_counter = 0
-    assembly_skip_reason_counts: CounterType[str] = Counter()
-    candidate_skip_reason_counts: CounterType[str] = Counter()
 
-    with zipfile.ZipFile(zip_path, "r") as zf, (
-        skip_log_path.open("w") if skip_log_path is not None else open("/dev/null", "w")
-    ) as skip_log_handle:
+    with zipfile.ZipFile(zip_path, "r") as zf:
         files = [name for name in zf.namelist() if name.endswith(".cif.gz")]
         if limit is not None:
             files = files[:limit]
 
-        print(f"Processing {len(files)} entries...")
         progress = tqdm(files, desc="Building LMDB")
 
         for filename in progress:
-            assemblies_read += 1
-            result, diagnostics = process_assembly(zf, filename, min_len, max_len, distance)
-
-            for diagnostic in diagnostics:
-                if skip_log_path is not None:
-                    skip_log_handle.write(json.dumps(diagnostic) + "\n")
-                if diagnostic["skip_reason_code"] == "no_valid_peptide_in_entry":
-                    entries_without_valid_peptide += 1
-                    assembly_skip_reason_counts[diagnostic["skip_reason_code"]] += 1
-                    continue
-
-                if diagnostic["entity_id"] is not None or diagnostic["peptide_subchain_id"] is not None:
-                    candidate_counter += 1
-                    if diagnostic["status"] == "passed":
-                        accepted_candidate_counter += 1
-                    elif diagnostic["skip_reason_code"] is not None:
-                        candidate_skip_reason_counts[diagnostic["skip_reason_code"]] += 1
-                elif diagnostic["status"] == "skipped" and diagnostic["skip_reason_code"] is not None:
-                    assembly_skip_reason_counts[diagnostic["skip_reason_code"]] += 1
-
-            if any(
-                diagnostic["entity_id"] is not None or diagnostic["peptide_subchain_id"] is not None
-                for diagnostic in diagnostics
-            ):
-                entries_with_valid_peptide += 1
+            result = process_assembly(zf, filename, min_len, max_len, distance)
 
             if result is None:
                 progress.set_postfix(ents=total_entities, pairs=total_pairs)
@@ -721,35 +615,91 @@ def build_lmdb(
             progress.set_postfix(ents=total_entities, pairs=total_pairs)
 
             with env.begin(write=True) as txn:
-                txn.put(pdb_id.encode(), msgpack.packb(data, use_bin_type=True))
+                txn.put(pdb_id.encode(), encode_lmdb_entry(data))
 
-    print(f"\nDone: {total_pairs} pairs from {total_entities} entities")
-    print(f"Assemblies read: {assemblies_read}")
-    print(f"Entries with at least one valid peptide candidate: {entries_with_valid_peptide}")
-    print(f"Entries with no valid peptide candidate: {entries_without_valid_peptide}")
-    print(f"Valid peptide candidates evaluated: {candidate_counter}")
-    print(f"Accepted peptide/receptor pairs: {accepted_candidate_counter}")
-    if assembly_skip_reason_counts:
-        print("Assembly-level skip reasons:")
-        for reason_code, count in assembly_skip_reason_counts.most_common():
-            print(f"  {reason_code}: {count}")
-    if candidate_skip_reason_counts:
-        print("Candidate-level rejection reasons:")
-        for reason_code, count in candidate_skip_reason_counts.most_common():
-            print(f"  {reason_code}: {count}")
     env.close()
 
 
+def validate_parameters(
+    zip_path: Path,
+    output_path: Path,
+    min_length: int,
+    max_length: int,
+    distance: float,
+    limit: int | None,
+) -> None:
+    """Validate CLI parameters before destructive LMDB creation starts."""
+    if not zip_path.exists():
+        raise ValueError(f"{zip_path} not found")
+    if zip_path.is_dir():
+        raise ValueError("zip_path must be a file path, not a directory")
+    if output_path.exists() and output_path.is_file():
+        raise ValueError("output_path must be an LMDB directory path, not a file")
+    if min_length < 1:
+        raise ValueError("--min-length must be at least 1")
+    if max_length < min_length:
+        raise ValueError("--max-length must be greater than or equal to --min-length")
+    if distance <= 0:
+        raise ValueError("--distance must be greater than 0")
+    if limit is not None and limit < 1:
+        raise ValueError("--limit must be at least 1 when provided")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("zip_path", nargs="?", type=Path, default="data/assemblies.zip")
-    parser.add_argument("output_path", nargs="?", type=Path, default="data/pdb_mldata.lmdb")
-    parser.add_argument("--min-length", type=int, default=4)
-    parser.add_argument("--max-length", type=int, default=32)
-    parser.add_argument("--distance", type=float, default=5.0)
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--skip-log-path", type=Path, default=None)
+    parser = argparse.ArgumentParser(
+        description="Build the peptide/receptor LMDB from assembly ZIP data."
+    )
+    parser.add_argument(
+        "zip_path",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_ASSEMBLIES_ZIP,
+        help="Path to the input assemblies ZIP (default: data/assemblies.zip)",
+    )
+    parser.add_argument(
+        "output_path",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_LMDB_PATH,
+        help="Path to the output LMDB directory (default: data/pdb_mldata.lmdb)",
+    )
+    parser.add_argument(
+        "--min-length",
+        type=int,
+        default=DEFAULT_MIN_LENGTH,
+        help="Minimum peptide length (default: 4)",
+    )
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=DEFAULT_MAX_LENGTH,
+        help="Maximum peptide length (default: 32)",
+    )
+    parser.add_argument(
+        "--distance",
+        type=float,
+        default=DEFAULT_DISTANCE,
+        help="Neighbor distance in Angstroms (default: 5.0)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process only the first N entries for testing",
+    )
     args = parser.parse_args()
+
+    try:
+        validate_parameters(
+            zip_path=args.zip_path,
+            output_path=args.output_path,
+            min_length=args.min_length,
+            max_length=args.max_length,
+            distance=args.distance,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     build_lmdb(
         zip_path=args.zip_path,
@@ -758,7 +708,6 @@ def main() -> None:
         max_len=args.max_length,
         distance=args.distance,
         limit=args.limit,
-        skip_log_path=args.skip_log_path,
     )
 
 
