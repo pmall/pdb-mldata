@@ -144,6 +144,7 @@ def check_entity(
     )
 
     chain_count = 0
+    pair_keys: set[tuple[str, str, str, str, str]] = set()
     for pair_index, pair in enumerate(entity["pairs"]):
         peptide_context = (
             f"{entity_context} pair {pair_index} peptide {pair['peptide']['chain']}"
@@ -151,6 +152,22 @@ def check_entity(
         receptor_context = (
             f"{entity_context} pair {pair_index} receptor {pair['receptor']['chain']}"
         )
+        pair_key = (
+            pdb_id,
+            pair["peptide"]["entity_id"],
+            pair["peptide"]["chain"],
+            pair["receptor"]["entity_id"],
+            pair["receptor"]["chain"],
+        )
+        if pair_key in pair_keys:
+            add_failure(
+                failures,
+                max_failures,
+                entity_context,
+                "duplicate peptide/receptor pair "
+                f"{pair['peptide']['chain']}->{pair['receptor']['chain']}",
+            )
+        pair_keys.add(pair_key)
         check_chain(
             chain=pair["peptide"],
             context=peptide_context,

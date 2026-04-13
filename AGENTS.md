@@ -111,6 +111,9 @@ For pipeline script verification:
 - When a parser is used for a data format, use only data exposed by that parser's parsed objects or documented parser APIs.
 - Do not manually parse raw structured-data fields to rescue missing values when a parser is already responsible for that format.
 - If required data is not available through the parser, stop and ask before adding fallback parsing or inference.
+- Ingestion from public data may reject or skip entries according to documented rules.
+- Consumers of internal data must not repair, infer, deduplicate, or silently skip malformed internal data.
+- Any inconsistency in internal data is a bug signal; downstream scripts must fail clearly so the source can be fixed.
 - Start with hard filters that keep only certain data.
 - Log and study rejection causes before widening filters.
 - Document every change in data strategy in `AGENTS.md` before implementing it.
@@ -251,6 +254,9 @@ Current rules:
 - For each chain of each peptide entity, use `scipy.spatial.KDTree` to identify all other chains in a 5 Angstrom neighborhood.
 - Water and explicitly defined non-polymer ligand chains do not count as neighbors.
 - If the peptide chain has exactly one meaningful neighboring chain and that chain is a protein chain, save the pair under the peptide entity.
+- If an entry produces duplicate peptide-chain/receptor-chain pair keys, skip the whole entry as malformed.
+- Do not collapse duplicate pairs to force an entry into the LMDB.
+- SQL export scripts must fail on duplicate pair keys in the LMDB; export is validation and publication, not cleanup.
 - Skip entries that do not satisfy these rules.
 - Existing LMDB database folders must be deleted before writing a new LMDB database to avoid errors caused by LMDB upsert behavior.
 - Entity sequences represent the ideal PDB entity sequence, while chain sequences and structures represent observed assembly chains; do not replace entity sequences with chain consensus.

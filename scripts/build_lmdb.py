@@ -98,6 +98,28 @@ ATOM_TYPES_37 = (
 PEPTIDE_POLYMER_TYPES = (gemmi.PolymerType.PeptideL, gemmi.PolymerType.PeptideD)
 
 
+class DuplicatePairError(Exception):
+    def __init__(
+        self,
+        pdb_id: str,
+        peptide_entity_id: str,
+        peptide_chain_id: str,
+        receptor_entity_id: str,
+        receptor_chain_id: str,
+    ) -> None:
+        self.pdb_id = pdb_id
+        self.peptide_entity_id = peptide_entity_id
+        self.peptide_chain_id = peptide_chain_id
+        self.receptor_entity_id = receptor_entity_id
+        self.receptor_chain_id = receptor_chain_id
+        super().__init__(
+            "duplicate peptide/receptor pair "
+            f"{pdb_id} "
+            f"{peptide_entity_id}:{peptide_chain_id}->"
+            f"{receptor_entity_id}:{receptor_chain_id}"
+        )
+
+
 @dataclass(frozen=True)
 class NormalizedResidueSpan:
     sequence: str
@@ -294,6 +316,16 @@ def build_subchain_entity_map(
     return subchain_to_entity, subchain_to_entity_id
 
 
+def pair_key(pdb_id: str, pair: PairData) -> tuple[str, str, str, str, str]:
+    return (
+        pdb_id,
+        pair["peptide"]["entity_id"],
+        pair["peptide"]["chain"],
+        pair["receptor"]["entity_id"],
+        pair["receptor"]["chain"],
+    )
+
+
 def build_assembly_atoms(model: gemmi.Model) -> tuple[np.ndarray, list[str]]:
     all_coords = []
     atom_subchains = []
@@ -430,6 +462,7 @@ def process_assembly(
     tree = KDTree(assembly_coords)
     entry: LmdbEntry = {"pdb_id": pdb_id, "entities": []}
     found_pairs = False
+    pair_keys: set[tuple[str, str, str, str, str]] = set()
 
     for entity in structure.entities:
         if entity.entity_type != gemmi.EntityType.Polymer:
@@ -547,6 +580,10 @@ def process_assembly(
                     "occupancy": receptor_occ,
                 },
             }
+            current_pair_key = pair_key(pdb_id, pair)
+            if current_pair_key in pair_keys:
+                raise DuplicatePairError(*current_pair_key)
+            pair_keys.add(current_pair_key)
             entity_entry["pairs"].append(pair)
             found_pairs = True
 
@@ -574,6 +611,7 @@ def build_lmdb(
 
     total_pairs = 0
     total_entities = 0
+    duplicate_pair_skips = 0
 
     with zipfile.ZipFile(zip_path, "r") as zf:
         files = [name for name in zf.namelist() if name.endswith(".cif.gz")]
@@ -583,22 +621,41 @@ def build_lmdb(
         progress = tqdm(files, desc="Building LMDB")
 
         for filename in progress:
-            result = process_assembly(zf, filename, min_len, max_len, distance)
+            try:
+                result = process_assembly(zf, filename, min_len, max_len, distance)
+            except DuplicatePairError as exc:
+                duplicate_pair_skips += 1
+                progress.write(f"[WARNING] Skipping {exc.pdb_id}: {exc}")
+                progress.set_postfix(
+                    ents=total_entities,
+                    pairs=total_pairs,
+                    dup_pairs=duplicate_pair_skips,
+                )
+                continue
 
             if result is None:
-                progress.set_postfix(ents=total_entities, pairs=total_pairs)
+                progress.set_postfix(
+                    ents=total_entities,
+                    pairs=total_pairs,
+                    dup_pairs=duplicate_pair_skips,
+                )
                 continue
 
             pdb_id, data = result
             total_entities += len(data["entities"])
             for entity in data["entities"]:
                 total_pairs += len(entity["pairs"])
-            progress.set_postfix(ents=total_entities, pairs=total_pairs)
+            progress.set_postfix(
+                ents=total_entities,
+                pairs=total_pairs,
+                dup_pairs=duplicate_pair_skips,
+            )
 
             with env.begin(write=True) as txn:
                 txn.put(pdb_id.encode(), encode_lmdb_entry(data))
 
     env.close()
+    print(f"Duplicate-pair entries skipped: {duplicate_pair_skips}")
 
 
 def validate_parameters(

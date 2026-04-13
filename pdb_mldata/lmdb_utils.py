@@ -35,9 +35,70 @@ class LmdbEntry(TypedDict):
     entities: list[EntityData]
 
 
+class ExportChainData(TypedDict):
+    entity_id: str
+    chain: str
+    sequence: str
+    residue_names: list[str]
+
+
+class ExportPairData(TypedDict):
+    peptide: ExportChainData
+    receptor: ExportChainData
+
+
+class ExportEntityData(TypedDict):
+    entity_id: str
+    sequence: str
+    residue_names: list[str]
+    pairs: list[ExportPairData]
+
+
+class ExportLmdbEntry(TypedDict):
+    pdb_id: str
+    entities: list[ExportEntityData]
+
+
 def encode_lmdb_entry(entry: LmdbEntry) -> bytes:
     """Serialize one LMDB entry with the project-wide msgpack convention."""
     return cast(bytes, msgpack.packb(entry, use_bin_type=True))
+
+
+def select_export_chain_data(chain_data: ChainData) -> ExportChainData:
+    """Select chain fields needed by downstream database exports."""
+    return {
+        "entity_id": chain_data["entity_id"],
+        "chain": chain_data["chain"],
+        "sequence": chain_data["sequence"],
+        "residue_names": chain_data["residue_names"],
+    }
+
+
+def unpack_lmdb_entry_for_export(entry_bytes: bytes) -> ExportLmdbEntry:
+    """Unpack one LMDB payload without decoding heavy structural byte arrays."""
+    data = cast(LmdbEntry, msgpack.unpackb(entry_bytes, raw=False))
+    export_entities: list[ExportEntityData] = []
+
+    for entity in data.get("entities", []):
+        export_pairs: list[ExportPairData] = []
+        for pair in entity.get("pairs", []):
+            export_pairs.append(
+                {
+                    "peptide": select_export_chain_data(pair["peptide"]),
+                    "receptor": select_export_chain_data(pair["receptor"]),
+                }
+            )
+
+        export_entities.append(
+            {
+                "entity_id": entity["entity_id"],
+                "sequence": entity["sequence"],
+                "residue_names": entity["residue_names"],
+                "pairs": export_pairs,
+            }
+        )
+
+    return {"pdb_id": data["pdb_id"], "entities": export_entities}
 
 
 def decode_chain_data(chain_data: ChainData) -> ChainData:
@@ -70,7 +131,7 @@ def decode_chain_data(chain_data: ChainData) -> ChainData:
 
 def decode_lmdb_entry(entry_bytes: bytes) -> LmdbEntry:
     """Unpack one LMDB payload and restore compressed structural arrays."""
-    data = cast(LmdbEntry, msgpack.unpackb(entry_bytes))
+    data = cast(LmdbEntry, msgpack.unpackb(entry_bytes, raw=False))
 
     for entity in data.get("entities", []):
         for pair in entity.get("pairs", []):
