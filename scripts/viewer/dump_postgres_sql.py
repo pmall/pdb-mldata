@@ -14,14 +14,14 @@ SqlValue: TypeAlias = int | float | str | None
 
 TABLE_COLUMNS = {
     "entries": ("pdb_id", "assembly_file_stem"),
-    "selected_peptide_entities": (
+    "peptides": (
         "pdb_id",
         "entity_id",
         "sequence",
         "residue_names_json",
     ),
-    "selected_pairs": (
-        "pair_id",
+    "chain_pairs": (
+        "chain_pair_id",
         "pdb_id",
         "peptide_entity_id",
         "peptide_chain_id",
@@ -32,7 +32,7 @@ TABLE_COLUMNS = {
         "receptor_sequence",
         "receptor_residue_names_json",
     ),
-    "entry_metadata": (
+    "entries_metadata": (
         "pdb_id",
         "title",
         "experimental_methods_json",
@@ -41,33 +41,73 @@ TABLE_COLUMNS = {
         "deposition_date",
         "initial_release_date",
     ),
-    "polymer_entity_metadata": (
+    "peptides_metadata": (
         "pdb_id",
         "entity_id",
         "entity_name",
         "organism_scientific_names_json",
         "taxonomy_ids_json",
-        "uniprot_accessions_json",
+        "accessions_json",
         "polymer_type",
         "sequence_length",
     ),
-    "metadata_fetch_failures": (
-        "failure_id",
-        "fetched_at",
-        "metadata_scope",
+    "targets_metadata": (
         "pdb_id",
         "entity_id",
-        "error_message",
+        "entity_name",
+        "organism_scientific_names_json",
+        "taxonomy_ids_json",
+        "accessions_json",
+        "polymer_type",
+        "sequence_length",
+    ),
+    "uniprot_metadata": (
+        "accession",
+        "reviewed",
+        "recommended_name",
+        "gene_names_json",
+        "organism_scientific_name",
+        "taxonomy_id",
+        "function_text",
+        "subcellular_locations_json",
+        "keywords_json",
+        "go_terms_json",
+        "interpro_ids_json",
+        "pfam_ids_json",
+    ),
+    "peptides_accessions": (
+        "pdb_id",
+        "entity_id",
+        "accession",
+    ),
+    "targets_accessions": (
+        "pdb_id",
+        "entity_id",
+        "accession",
+    ),
+    "search_terms": (
+        "search_term_id",
+        "term",
+        "term_kind",
+        "rank_weight",
+    ),
+    "search_terms_targets": (
+        "search_terms_target_id",
+        "search_term_id",
+        "pdb_id",
+        "entity_id",
     ),
 }
 TABLE_ORDER = tuple(TABLE_COLUMNS)
 POSTGRES_SCHEMA = """
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE entries (
     pdb_id TEXT PRIMARY KEY,
     assembly_file_stem TEXT NOT NULL
 );
 
-CREATE TABLE selected_peptide_entities (
+CREATE TABLE peptides (
     pdb_id TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     sequence TEXT NOT NULL,
@@ -76,8 +116,19 @@ CREATE TABLE selected_peptide_entities (
     FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
 );
 
-CREATE TABLE selected_pairs (
-    pair_id BIGINT PRIMARY KEY,
+CREATE TABLE entries_metadata (
+    pdb_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    experimental_methods_json TEXT NOT NULL,
+    resolution_combined_json TEXT NOT NULL,
+    best_resolution DOUBLE PRECISION,
+    deposition_date TEXT,
+    initial_release_date TEXT,
+    FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
+);
+
+CREATE TABLE chain_pairs (
+    chain_pair_id BIGINT PRIMARY KEY,
     pdb_id TEXT NOT NULL,
     peptide_entity_id TEXT NOT NULL,
     peptide_chain_id TEXT NOT NULL,
@@ -89,7 +140,7 @@ CREATE TABLE selected_pairs (
     receptor_residue_names_json TEXT NOT NULL,
     FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id),
     FOREIGN KEY (pdb_id, peptide_entity_id)
-        REFERENCES selected_peptide_entities (pdb_id, entity_id),
+        REFERENCES peptides (pdb_id, entity_id),
     UNIQUE (
         pdb_id,
         peptide_entity_id,
@@ -99,56 +150,117 @@ CREATE TABLE selected_pairs (
     )
 );
 
-CREATE TABLE entry_metadata (
-    pdb_id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    experimental_methods_json TEXT NOT NULL,
-    resolution_combined_json TEXT NOT NULL,
-    best_resolution DOUBLE PRECISION,
-    deposition_date TEXT,
-    initial_release_date TEXT,
-    FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
-);
-
-CREATE TABLE polymer_entity_metadata (
+CREATE TABLE peptides_metadata (
     pdb_id TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     entity_name TEXT NOT NULL,
     organism_scientific_names_json TEXT NOT NULL,
     taxonomy_ids_json TEXT NOT NULL,
-    uniprot_accessions_json TEXT NOT NULL,
+    accessions_json TEXT NOT NULL,
+    polymer_type TEXT NOT NULL,
+    sequence_length BIGINT,
+    PRIMARY KEY (pdb_id, entity_id),
+    FOREIGN KEY (pdb_id, entity_id)
+        REFERENCES peptides (pdb_id, entity_id)
+);
+
+CREATE TABLE targets_metadata (
+    pdb_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    entity_name TEXT NOT NULL,
+    organism_scientific_names_json TEXT NOT NULL,
+    taxonomy_ids_json TEXT NOT NULL,
+    accessions_json TEXT NOT NULL,
     polymer_type TEXT NOT NULL,
     sequence_length BIGINT,
     PRIMARY KEY (pdb_id, entity_id),
     FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
 );
 
-CREATE TABLE metadata_fetch_failures (
-    failure_id BIGINT PRIMARY KEY,
-    fetched_at TEXT NOT NULL,
-    metadata_scope TEXT NOT NULL,
-    pdb_id TEXT NOT NULL,
-    entity_id TEXT,
-    error_message TEXT NOT NULL,
-    FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
+CREATE TABLE uniprot_metadata (
+    accession TEXT PRIMARY KEY,
+    reviewed BIGINT NOT NULL,
+    recommended_name TEXT NOT NULL,
+    gene_names_json TEXT NOT NULL,
+    organism_scientific_name TEXT NOT NULL,
+    taxonomy_id BIGINT,
+    function_text TEXT NOT NULL,
+    subcellular_locations_json TEXT NOT NULL,
+    keywords_json TEXT NOT NULL,
+    go_terms_json TEXT NOT NULL,
+    interpro_ids_json TEXT NOT NULL,
+    pfam_ids_json TEXT NOT NULL
 );
 
-CREATE INDEX idx_selected_pairs_pdb_id
-    ON selected_pairs (pdb_id);
-CREATE INDEX idx_selected_pairs_peptide_chain
-    ON selected_pairs (peptide_chain_id);
-CREATE INDEX idx_selected_pairs_receptor_chain
-    ON selected_pairs (receptor_chain_id);
-CREATE INDEX idx_selected_pairs_peptide_entity
-    ON selected_pairs (pdb_id, peptide_entity_id);
-CREATE INDEX idx_selected_pairs_receptor_entity
-    ON selected_pairs (pdb_id, receptor_entity_id);
-CREATE INDEX idx_polymer_entity_metadata_entity_name
-    ON polymer_entity_metadata (entity_name);
-CREATE INDEX idx_metadata_failures_pdb_id
-    ON metadata_fetch_failures (pdb_id);
-CREATE INDEX idx_metadata_failures_scope
-    ON metadata_fetch_failures (metadata_scope);
+CREATE TABLE peptides_accessions (
+    pdb_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    accession TEXT NOT NULL,
+    FOREIGN KEY (pdb_id, entity_id)
+        REFERENCES peptides (pdb_id, entity_id),
+    FOREIGN KEY (pdb_id, entity_id)
+        REFERENCES peptides_metadata (pdb_id, entity_id),
+    FOREIGN KEY (accession) REFERENCES uniprot_metadata (accession),
+    PRIMARY KEY (pdb_id, entity_id, accession)
+);
+
+CREATE TABLE targets_accessions (
+    pdb_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    accession TEXT NOT NULL,
+    FOREIGN KEY (pdb_id, entity_id)
+        REFERENCES targets_metadata (pdb_id, entity_id),
+    FOREIGN KEY (accession) REFERENCES uniprot_metadata (accession),
+    PRIMARY KEY (pdb_id, entity_id, accession)
+);
+
+CREATE TABLE search_terms (
+    search_term_id BIGINT PRIMARY KEY,
+    term TEXT NOT NULL,
+    term_kind TEXT NOT NULL,
+    rank_weight BIGINT NOT NULL,
+    UNIQUE (term)
+);
+
+CREATE TABLE search_terms_targets (
+    search_terms_target_id BIGINT PRIMARY KEY,
+    search_term_id BIGINT NOT NULL,
+    pdb_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    FOREIGN KEY (search_term_id) REFERENCES search_terms (search_term_id),
+    FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id),
+    FOREIGN KEY (pdb_id, entity_id)
+        REFERENCES targets_metadata (pdb_id, entity_id),
+    UNIQUE (search_term_id, pdb_id, entity_id)
+);
+"""
+
+POSTGRES_INDEXES = """
+CREATE INDEX idx_targets_metadata__entity_name
+    ON targets_metadata (entity_name);
+CREATE INDEX idx_peptides_metadata__entity_name
+    ON peptides_metadata (entity_name);
+CREATE INDEX idx_chain_pairs__peptide_chain_id
+    ON chain_pairs (peptide_chain_id);
+CREATE INDEX idx_chain_pairs__receptor_chain_id
+    ON chain_pairs (receptor_chain_id);
+CREATE INDEX idx_chain_pairs__pdb_id_peptide_entity_id
+    ON chain_pairs (pdb_id, peptide_entity_id);
+CREATE INDEX idx_chain_pairs__pdb_id_receptor_entity_id
+    ON chain_pairs (pdb_id, receptor_entity_id);
+CREATE INDEX idx_peptides_accessions__accession
+    ON peptides_accessions (accession);
+CREATE INDEX idx_targets_accessions__accession
+    ON targets_accessions (accession);
+CREATE INDEX idx_search_terms__term_kind
+    ON search_terms (term_kind);
+CREATE INDEX idx_search_terms_targets__search_term_id
+    ON search_terms_targets (search_term_id);
+CREATE INDEX idx_search_terms_targets__pdb_id_entity_id
+    ON search_terms_targets (pdb_id, entity_id);
+CREATE INDEX idx_search_terms__term_trgm
+    ON search_terms
+    USING GIN (term gin_trgm_ops);
 """
 
 
@@ -166,12 +278,17 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def quote_sql_value(value: SqlValue) -> str:
+def quote_copy_value(value: SqlValue) -> str:
     if value is None:
-        return "NULL"
+        return r"\N"
     if isinstance(value, int | float):
         return str(value)
-    return "'" + value.replace("'", "''") + "'"
+    return (
+        value.replace("\\", "\\\\")
+        .replace("\t", r"\t")
+        .replace("\n", r"\n")
+        .replace("\r", r"\r")
+    )
 
 
 def expected_columns_sql(table: str) -> str:
@@ -206,12 +323,8 @@ def iter_table_rows(
     )
 
 
-def render_insert_statement(table: str, row: tuple[SqlValue, ...]) -> str:
-    columns_sql = expected_columns_sql(table)
-    values_sql = ", ".join(quote_sql_value(value) for value in row)
-    return (
-        f"INSERT INTO {quote_identifier(table)} ({columns_sql}) VALUES ({values_sql});"
-    )
+def render_copy_row(row: tuple[SqlValue, ...]) -> str:
+    return "\t".join(quote_copy_value(value) for value in row)
 
 
 def dump_sqlite_to_postgres_sql(sqlite_path: Path, sql_path: Path) -> int:
@@ -232,12 +345,20 @@ def dump_sqlite_to_postgres_sql(sqlite_path: Path, sql_path: Path) -> int:
 
             with tqdm(total=total_rows, desc="Dumping SQL", unit="row") as progress:
                 for table in TABLE_ORDER:
+                    columns_sql = expected_columns_sql(table)
+                    handle.write(
+                        f"COPY {quote_identifier(table)} ({columns_sql}) FROM stdin;\n"
+                    )
+                    statement_count += 1
                     for row in iter_table_rows(connection, table):
-                        handle.write(render_insert_statement(table, row))
+                        handle.write(render_copy_row(row))
                         handle.write("\n")
-                        statement_count += 1
                         progress.update(1)
+                    handle.write("\\.\n")
 
+            handle.write(POSTGRES_INDEXES.strip())
+            handle.write("\n")
+            statement_count += POSTGRES_INDEXES.count("CREATE ")
             handle.write("COMMIT;\n")
             statement_count += 2
     finally:

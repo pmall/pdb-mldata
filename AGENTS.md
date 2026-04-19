@@ -160,12 +160,14 @@ The LMDB entry schema is:
     {
       "entity_id": "",
       "sequence": "",
+      "residue_names": [],
       "pairs": [
         {
           "peptide": {
             "entity_id": "",
             "chain": "",
             "sequence": "",
+            "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
             "occupancy": "<bytes>"
@@ -174,6 +176,7 @@ The LMDB entry schema is:
             "entity_id": "",
             "chain": "",
             "sequence": "",
+            "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
             "occupancy": "<bytes>"
@@ -191,6 +194,7 @@ Schema details:
 - `entities`: one entry per peptide entity.
 - `entity_id`: PDB entity identifier.
 - `sequence`: entity or raw chain sequence, depending on the object.
+- `residue_names`: exact retained 3-letter residue names after cap trimming.
 - `pairs`: one entry per peptide-chain/receptor-chain pair.
 - `structure`: `float16 [N, 37, 3]` serialized with `.tobytes()`.
 - `b_factors`: `uint8 [N, 37]` serialized with `.tobytes()`, where `255` means missing.
@@ -198,7 +202,9 @@ Schema details:
 
 ## 4. Current Script Pipeline
 
-There are currently three scripts. More scripts may be added later.
+There are currently three core data-building scripts. Viewer database scripts live
+under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer
+database details.
 
 ### 4.1 `fetch_metadata`
 

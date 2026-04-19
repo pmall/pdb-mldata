@@ -19,8 +19,8 @@ DEFAULT_SQLITE_PATH = Path("data/pdb_mldata.sqlite")
 @dataclass(frozen=True)
 class ExportStats:
     entries_inserted: int
-    entities_inserted: int
-    pairs_inserted: int
+    peptides_inserted: int
+    chain_pairs_inserted: int
 
 
 def validate_parameters(
@@ -58,7 +58,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
             assembly_file_stem TEXT NOT NULL
         );
 
-        CREATE TABLE selected_peptide_entities (
+        CREATE TABLE peptides (
             pdb_id TEXT NOT NULL,
             entity_id TEXT NOT NULL,
             sequence TEXT NOT NULL,
@@ -67,8 +67,8 @@ def create_schema(connection: sqlite3.Connection) -> None:
             FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
         );
 
-        CREATE TABLE selected_pairs (
-            pair_id INTEGER PRIMARY KEY,
+        CREATE TABLE chain_pairs (
+            chain_pair_id INTEGER PRIMARY KEY,
             pdb_id TEXT NOT NULL,
             peptide_entity_id TEXT NOT NULL,
             peptide_chain_id TEXT NOT NULL,
@@ -80,7 +80,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
             receptor_residue_names_json TEXT NOT NULL,
             FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id),
             FOREIGN KEY (pdb_id, peptide_entity_id)
-                REFERENCES selected_peptide_entities (pdb_id, entity_id),
+                REFERENCES peptides (pdb_id, entity_id),
             UNIQUE (
                 pdb_id,
                 peptide_entity_id,
@@ -90,16 +90,14 @@ def create_schema(connection: sqlite3.Connection) -> None:
             )
         );
 
-        CREATE INDEX idx_selected_pairs_pdb_id
-            ON selected_pairs (pdb_id);
-        CREATE INDEX idx_selected_pairs_peptide_chain
-            ON selected_pairs (peptide_chain_id);
-        CREATE INDEX idx_selected_pairs_receptor_chain
-            ON selected_pairs (receptor_chain_id);
-        CREATE INDEX idx_selected_pairs_peptide_entity
-            ON selected_pairs (pdb_id, peptide_entity_id);
-        CREATE INDEX idx_selected_pairs_receptor_entity
-            ON selected_pairs (pdb_id, receptor_entity_id);
+        CREATE INDEX idx_chain_pairs__peptide_chain_id
+            ON chain_pairs (peptide_chain_id);
+        CREATE INDEX idx_chain_pairs__receptor_chain_id
+            ON chain_pairs (receptor_chain_id);
+        CREATE INDEX idx_chain_pairs__pdb_id_peptide_entity_id
+            ON chain_pairs (pdb_id, peptide_entity_id);
+        CREATE INDEX idx_chain_pairs__pdb_id_receptor_entity_id
+            ON chain_pairs (pdb_id, receptor_entity_id);
         """
     )
     connection.commit()
@@ -152,7 +150,7 @@ def insert_entry(
     )
 
 
-def insert_entity(
+def insert_peptide(
     connection: sqlite3.Connection,
     pdb_id: str,
     entity_id: str,
@@ -163,7 +161,7 @@ def insert_entity(
     values = (pdb_id, entity_id, sequence, residue_names_json(residue_names))
     insert_row(
         connection=connection,
-        table="selected_peptide_entities",
+        table="peptides",
         columns=columns,
         values=values,
     )
@@ -180,7 +178,7 @@ def fetch_pair_by_natural_key(
 ) -> tuple[object, ...] | None:
     return fetch_one_row(
         connection=connection,
-        table="selected_pairs",
+        table="chain_pairs",
         columns=columns,
         key_columns=(
             "pdb_id",
@@ -210,7 +208,7 @@ def insert_pair(
     receptor_chain_id: str,
     receptor_sequence: str,
     receptor_residue_names: list[str],
-) -> None:
+) -> int:
     columns = (
         "pdb_id",
         "peptide_entity_id",
@@ -245,7 +243,7 @@ def insert_pair(
     )
     if existing_by_natural_key is not None:
         raise ValueError(
-            "duplicate selected pair in LMDB: "
+            "duplicate chain pair in LMDB: "
             f"pdb_id={pdb_id}, "
             f"peptide_entity_id={peptide_entity_id}, "
             f"peptide_chain_id={peptide_chain_id}, "
@@ -253,12 +251,12 @@ def insert_pair(
             f"receptor_chain_id={receptor_chain_id}"
         )
 
-    insert_row(
-        connection=connection,
-        table="selected_pairs",
-        columns=columns,
-        values=values,
-    )
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"INSERT INTO chain_pairs ({', '.join(columns)}) VALUES ({placeholders})"
+    cursor = connection.execute(sql, values)
+    if cursor.lastrowid is None:
+        raise ValueError("could not read inserted chain_pair_id")
+    return cursor.lastrowid
 
 
 def export_entry(
@@ -267,18 +265,18 @@ def export_entry(
 ) -> tuple[int, int, int]:
     insert_entry(connection, entry)
     entries_inserted = 1
-    entities_inserted = 0
-    pairs_inserted = 0
+    peptides_inserted = 0
+    chain_pairs_inserted = 0
 
     for entity in entry["entities"]:
-        insert_entity(
+        insert_peptide(
             connection=connection,
             pdb_id=entry["pdb_id"],
             entity_id=entity["entity_id"],
             sequence=entity["sequence"],
             residue_names=entity["residue_names"],
         )
-        entities_inserted += 1
+        peptides_inserted += 1
 
         for pair in entity["pairs"]:
             insert_pair(
@@ -293,12 +291,12 @@ def export_entry(
                 receptor_sequence=pair["receptor"]["sequence"],
                 receptor_residue_names=pair["receptor"]["residue_names"],
             )
-            pairs_inserted += 1
+            chain_pairs_inserted += 1
 
     return (
         entries_inserted,
-        entities_inserted,
-        pairs_inserted,
+        peptides_inserted,
+        chain_pairs_inserted,
     )
 
 
@@ -313,8 +311,8 @@ def export_lmdb_to_sqlite(
     create_schema(connection)
 
     entries_inserted = 0
-    entities_inserted = 0
-    pairs_inserted = 0
+    peptides_inserted = 0
+    chain_pairs_inserted = 0
 
     env = lmdb.open(str(db_path), readonly=True, lock=False)
     with env.begin() as txn:
@@ -331,19 +329,19 @@ def export_lmdb_to_sqlite(
             entry = unpack_lmdb_entry_for_export(cast(bytes, value))
             (
                 entry_inserted_count,
-                entity_inserted_count,
-                pair_inserted_count,
+                peptide_inserted_count,
+                chain_pair_inserted_count,
             ) = export_entry(
                 connection=connection,
                 entry=entry,
             )
             entries_inserted += entry_inserted_count
-            entities_inserted += entity_inserted_count
-            pairs_inserted += pair_inserted_count
+            peptides_inserted += peptide_inserted_count
+            chain_pairs_inserted += chain_pair_inserted_count
             progress.set_postfix(
                 entries=entries_inserted,
-                entities=entities_inserted,
-                pairs=pairs_inserted,
+                peptides=peptides_inserted,
+                chain_pairs=chain_pairs_inserted,
             )
 
     env.close()
@@ -352,8 +350,8 @@ def export_lmdb_to_sqlite(
 
     return ExportStats(
         entries_inserted=entries_inserted,
-        entities_inserted=entities_inserted,
-        pairs_inserted=pairs_inserted,
+        peptides_inserted=peptides_inserted,
+        chain_pairs_inserted=chain_pairs_inserted,
     )
 
 
@@ -399,8 +397,8 @@ def main() -> None:
 
     print(f"Wrote selection export to {args.sqlite_path}")
     print(f"Entries inserted: {stats.entries_inserted}")
-    print(f"Peptide entities inserted: {stats.entities_inserted}")
-    print(f"Pairs inserted: {stats.pairs_inserted}")
+    print(f"Peptides inserted: {stats.peptides_inserted}")
+    print(f"Chain pairs inserted: {stats.chain_pairs_inserted}")
 
 
 if __name__ == "__main__":
