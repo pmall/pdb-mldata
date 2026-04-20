@@ -2,7 +2,7 @@
 
 This file contains project-specific instructions for AI agents working on this repository. Agents must follow these rules at all times.
 
-## 1. Code Guidelines
+## 1. Engineering Guidelines
 
 ### 1.1 Package And Tooling
 
@@ -13,7 +13,7 @@ This file contains project-specific instructions for AI agents working on this r
 - Ruff is the default Python formatter and import cleanup tool.
 - Pyright is the default Python type checker.
 
-### 1.2 Structure
+### 1.2 Script And Module Structure
 
 - Every executable script must define a `main()` function.
 - `main()` must only parse CLI parameters, validate those parameters, and call a separate logic function.
@@ -29,7 +29,6 @@ This file contains project-specific instructions for AI agents working on this r
 - All file path parameters must have default values.
 - All parameters must have default values unless they enable a truly optional feature.
 - Default values for paths and settings must be consistent across the project.
-- Optional functionality may omit a default when absence means "do not use this feature". Example: `--log-skip-path`.
 - Validate CLI parameters in `main()` before calling the logic function.
 
 ### 1.4 Console Reporting
@@ -38,15 +37,7 @@ This file contains project-specific instructions for AI agents working on this r
 - Long-running operations should usually show a progress bar with progress and estimated time to completion.
 - Console output should make skipped data, rejection counts, and completion status easy to understand.
 
-### 1.5 Comment Style
-
-- Comments must explain why the code is doing something when that reasoning is not obvious from the code itself.
-- Comments should be useful to future coding agents and future maintainers.
-- Avoid comments that restate the code.
-- Keep comments short and precise.
-- Use a single comment style across the project: complete-sentence comments immediately before the non-obvious block they explain.
-
-### 1.6 Code Style
+### 1.5 Code Style
 
 - Keep code modular and explicit.
 - Prefer small, single-purpose functions over large procedural blocks.
@@ -54,7 +45,7 @@ This file contains project-specific instructions for AI agents working on this r
 - Keep data transformations explicit and local to the step that owns them.
 - Follow the style already established in the repository unless it conflicts with this file.
 
-### 1.7 Typing
+### 1.6 Typing
 
 - Typing must not be defensive.
 - Avoid `Optional` unless `None` is a real, required state in the domain model.
@@ -62,15 +53,23 @@ This file contains project-specific instructions for AI agents working on this r
 - Aim for exact types.
 - Prefer concrete domain types, dataclasses, typed dictionaries, or explicit container types where they make the data contract clearer.
 
+### 1.7 Comments
+
+- Comments must explain why the code is doing something when that reasoning is not obvious from the code itself.
+- Comments should be useful to future coding agents and future maintainers.
+- Avoid comments that restate the code.
+- Keep comments short and precise.
+- Use a single comment style across the project: complete-sentence comments immediately before the non-obvious block they explain.
+
 ### 1.8 Code Updates
 
 - Code updates must always be defensive.
 - Do not update working parts of the code unless the user explicitly asks for that change.
 - Keep edits scoped to the requested behavior.
 - Do not refactor unrelated code opportunistically.
-- Do not silently alter raw PDB data structures to make entries fit expectations.
+- Do not silently alter raw source data structures to make records fit expectations.
 
-### 1.9 Session Acceptance Checklist
+### 1.9 Verification
 
 At the end of every coding session:
 
@@ -78,14 +77,14 @@ At the end of every coding session:
 - Run `uv run ruff format`.
 - Run `uv run ruff check --fix`.
 - Run `uv run pyright`.
-- Run `uv run python -m compileall -q scripts main.py pdb_mldata`.
+- Run `uv run python -m compileall -q scripts`.
 - Check the diff and confirm it contains only intentional changes.
 
-For pipeline script verification:
+For data-processing or pipeline script verification:
 
-- Avoid running full pipeline scripts for testing because they are long-running.
-- When a script supports `--limit`, use `--limit` with a small number of entries for agent-side verification.
-- If a meaningful verification requires a full script run, ask the developer to run it.
+- Prefer smoke tests over full pipeline runs during agent-side verification.
+- When a script supports `--limit`, use `--limit` with a small number of records for agent-side verification.
+- If a meaningful verification requires a full data-processing run, ask the developer to run it.
 - Do not start long-running data processing jobs unless the user explicitly asks for a full run.
 
 ### 1.10 Git Workflow
@@ -93,32 +92,43 @@ For pipeline script verification:
 - Never commit unless the user explicitly asks for a commit.
 - Check the diff before preparing a commit message.
 - Commit messages should usually start with a one-line explanation, followed by a bullet list of details.
+- When using `git commit` from the command line, do not pass each bullet as a separate `-m` argument because that creates extra blank lines between bullets.
 - Commit messages must focus on meaningful information for other developers.
 - Commit messages must describe meaningful changes since the last commit.
 - Do not include back-and-forth session details in commit messages.
 - Do not focus commit messages on low-level implementation details unless those details affect other developers.
 - Never add a co-author.
 
-## 2. Defensive Data Science Philosophy
+## 2. Defensive Data Science Rules
+
+### 2.1 Core Philosophy
 
 - This project follows defensive data science.
 - Ambiguity means reject the data.
 - Uncertainty means reject the data.
 - If an entry does not fit the established rules, either stop or log and skip it.
+- Start with hard filters that keep only certain data.
+- Log and study rejection causes before widening filters.
+- Document every change in data strategy in `AGENTS.md` before implementing it.
+
+### 2.2 Data Handling
+
 - Never manually merge chains or alter data to force entries to fit a mental model.
 - Never make data manipulation decisions silently.
 - Never apply transformations to the raw PDB data structure itself.
 - When a parser is used for a data format, use only data exposed by that parser's parsed objects or documented parser APIs.
 - Do not manually parse raw structured-data fields to rescue missing values when a parser is already responsible for that format.
 - If required data is not available through the parser, stop and ask before adding fallback parsing or inference.
+
+### 2.3 Public And Internal Data
+
 - Ingestion from public data may reject or skip entries according to documented rules.
 - Consumers of internal data must not repair, infer, deduplicate, or silently skip malformed internal data.
 - Any inconsistency in internal data is a bug signal; downstream scripts must fail clearly so the source can be fixed.
-- Start with hard filters that keep only certain data.
-- Log and study rejection causes before widening filters.
-- Document every change in data strategy in `AGENTS.md` before implementing it.
 
-## 3. Overall Project Goal
+## 3. Domain And Storage Contract
+
+### 3.1 Project Goal
 
 This project builds an exhaustive repository of peptide/receptor pairs from the whole Protein Data Bank.
 
@@ -132,16 +142,15 @@ The final structure is hierarchical because of the structure of the PDB:
 - Peptide entity: a PDB entry may have many peptide entities with at least one valid receptor.
 - Pair: a peptide entity may have many chain-level peptide/receptor pairs.
 
-For sequences, trim the usual caps on both C-terminus and N-terminus.
+### 3.2 Sequence And Structure Rules
 
-For structures, extract the 37 amino-acid atom 3D positions and store them sorted according to the AlphaFold convention.
+- For sequences, trim the usual caps on both C-terminus and N-terminus.
+- For structures, extract the 37 amino-acid atom 3D positions and store them sorted according to the AlphaFold convention.
+- Store residue-level quality values:
+  - B-factor.
+  - Occupancy.
 
-Store residue-level quality values:
-
-- B-factor.
-- Occupancy.
-
-Storage conventions:
+### 3.3 Storage Conventions
 
 - Structure coordinates are stored as `float16` bytes.
 - B-factors are stored as `uint8` bytes.
@@ -151,7 +160,7 @@ Storage conventions:
 - Encoding and decoding conventions for LMDB entries must live in `pdb_mldata/lmdb_utils.py`.
 - Use the shared LMDB encoder and decoder instead of duplicating serialization logic in scripts.
 
-The LMDB entry schema is:
+### 3.4 LMDB Entry Schema
 
 ```json
 {
@@ -200,11 +209,9 @@ Schema details:
 - `b_factors`: `uint8 [N, 37]` serialized with `.tobytes()`, where `255` means missing.
 - `occupancy`: `uint8 [N, 37]` serialized with `.tobytes()`, where occupancy was multiplied by 100 and `255` means missing.
 
-## 4. Current Script Pipeline
+## 4. Pipeline
 
-There are currently three core data-building scripts. Viewer database scripts live
-under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer
-database details.
+There are currently three core data-building scripts. Viewer database scripts live under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer database details.
 
 ### 4.1 `fetch_metadata`
 
