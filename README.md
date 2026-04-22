@@ -11,6 +11,9 @@ rejected instead of repaired, inferred, or silently merged. The goal is a datase
 whose inclusion rules are easy to audit and whose failures can be studied before
 the filters are widened.
 
+Live viewer for selected chain pairs:
+https://pdb-viewer-ashy.vercel.app/
+
 ## What Counts As A Pair
 
 A peptide is a protein entity whose sequence is 4 to 32 amino acids long after
