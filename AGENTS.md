@@ -211,7 +211,7 @@ Schema details:
 
 ## 4. Pipeline
 
-There are currently three core data-building scripts. Viewer database scripts live under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer database details.
+There are currently three core data-building scripts. Viewer database scripts live under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer database details. Subjective dataset-selection scripts live under `scripts/curation/`.
 
 ### 4.1 `fetch_metadata`
 
@@ -288,4 +288,35 @@ Parameters:
 - Minimum peptide length: `4`.
 - Maximum peptide length: `32`.
 - Distance threshold: `5.0`.
+- Optional processing limit for testing: process only `N` entries.
+
+### 4.4 `curation/filter_binding_pairs`
+
+Goal: apply the first subjective curation filter to the chain-level peptide/receptor pairs saved by `build_lmdb`.
+
+This script does not change the storage schema. It reads one LMDB, removes chain pairs that do not look like useful peptide/receptor binding samples under the current curation rule, and writes a new LMDB with the same entry schema.
+
+Current rules:
+
+- Read parsed pairs from `data/pdb_mldata.lmdb`.
+- Write accepted pairs to `data/pdb_mldata_binding.lmdb`.
+- Use all finite atom coordinates from the stored 37-atom arrays.
+- A peptide residue counts as contacting the receptor when any stored peptide atom is within 5 Angstroms of any stored receptor atom and that same peptide atom has B-factor less than or equal to 70.
+- Keep a pair only when at least 4 peptide residues have a qualifying contact atom.
+- Keep a pair only when at least half of the peptide residues have a qualifying contact atom.
+- Do not use occupancy in this curation rule.
+- Reject pairs with no usable peptide or receptor coordinates.
+- Drop peptide entities with no accepted pairs.
+- Drop entries with no accepted peptide entities.
+- Keep all accepted pairs; do not select the best chain pair in this script.
+- Additional subjective filters, such as filtering chains with too many `X` residues, must be studied before being added.
+
+Parameters:
+
+- Input LMDB database folder path: `data/pdb_mldata.lmdb`.
+- Output LMDB database folder path: `data/pdb_mldata_binding.lmdb`.
+- Distance threshold: `5.0`.
+- Minimum contacting peptide residues: `4`.
+- Minimum contacting peptide residue fraction: `0.5`.
+- Maximum contact peptide-atom B-factor: `70.0`.
 - Optional processing limit for testing: process only `N` entries.

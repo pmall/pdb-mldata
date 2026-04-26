@@ -11,3 +11,6 @@ wheels/
 
 # Project data
 data/
+
+# Local Codex marker file
+.codex
