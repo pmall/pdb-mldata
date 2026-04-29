@@ -35,6 +35,23 @@ class LmdbEntry(TypedDict):
     entities: list[EntityData]
 
 
+class EntitySummaryData(TypedDict):
+    entity_id: str
+    sequence: str
+    residue_names: list[str]
+
+
+class BestPairData(TypedDict):
+    entity: EntitySummaryData
+    peptide: ChainData
+    receptor: ChainData
+
+
+class BestPairLmdbEntry(TypedDict):
+    pdb_id: str
+    pairs: list[BestPairData]
+
+
 class ExportChainData(TypedDict):
     entity_id: str
     chain: str
@@ -59,8 +76,24 @@ class ExportLmdbEntry(TypedDict):
     entities: list[ExportEntityData]
 
 
+class ExportBestPairData(TypedDict):
+    entity: EntitySummaryData
+    peptide: ExportChainData
+    receptor: ExportChainData
+
+
+class ExportBestPairLmdbEntry(TypedDict):
+    pdb_id: str
+    pairs: list[ExportBestPairData]
+
+
 def encode_lmdb_entry(entry: LmdbEntry) -> bytes:
     """Serialize one LMDB entry with the project-wide msgpack convention."""
+    return cast(bytes, msgpack.packb(entry, use_bin_type=True))
+
+
+def encode_best_pair_lmdb_entry(entry: BestPairLmdbEntry) -> bytes:
+    """Serialize one best-pair LMDB entry with the project-wide msgpack convention."""
     return cast(bytes, msgpack.packb(entry, use_bin_type=True))
 
 
@@ -101,6 +134,25 @@ def unpack_lmdb_entry_for_export(entry_bytes: bytes) -> ExportLmdbEntry:
     return {"pdb_id": data["pdb_id"], "entities": export_entities}
 
 
+def unpack_best_pair_lmdb_entry_for_export(
+    entry_bytes: bytes,
+) -> ExportBestPairLmdbEntry:
+    """Unpack one best-pair payload without decoding heavy structural byte arrays."""
+    data = cast(BestPairLmdbEntry, msgpack.unpackb(entry_bytes, raw=False))
+    export_pairs: list[ExportBestPairData] = []
+
+    for pair in data.get("pairs", []):
+        export_pairs.append(
+            {
+                "entity": pair["entity"],
+                "peptide": select_export_chain_data(pair["peptide"]),
+                "receptor": select_export_chain_data(pair["receptor"]),
+            }
+        )
+
+    return {"pdb_id": data["pdb_id"], "pairs": export_pairs}
+
+
 def decode_chain_data(chain_data: ChainData) -> ChainData:
     """Decode one chain payload back to arrays and restore sentinel NaN values."""
     decoded = chain_data.copy()
@@ -139,5 +191,16 @@ def decode_lmdb_entry(entry_bytes: bytes) -> LmdbEntry:
                 pair["peptide"] = decode_chain_data(pair["peptide"])
             if "receptor" in pair:
                 pair["receptor"] = decode_chain_data(pair["receptor"])
+
+    return data
+
+
+def decode_best_pair_lmdb_entry(entry_bytes: bytes) -> BestPairLmdbEntry:
+    """Unpack one best-pair LMDB payload and restore compressed structural arrays."""
+    data = cast(BestPairLmdbEntry, msgpack.unpackb(entry_bytes, raw=False))
+
+    for pair in data.get("pairs", []):
+        pair["peptide"] = decode_chain_data(pair["peptide"])
+        pair["receptor"] = decode_chain_data(pair["receptor"])
 
     return data

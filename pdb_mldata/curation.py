@@ -42,6 +42,15 @@ class BindingMetrics:
 
 
 @dataclass(frozen=True)
+class BestPairMetrics:
+    valid_contact_residues: int
+    valid_contact_fraction: float
+    mean_valid_contact_atom_b_factor: float
+    finite_peptide_residues: int
+    receptor_residues: int
+
+
+@dataclass(frozen=True)
 class BindingFilter:
     distance: float
     min_contact_residues: int
@@ -163,6 +172,48 @@ def find_valid_contact_residue_indexes(
     return valid_contact_residue_indexes
 
 
+def collect_valid_contact_data(
+    peptide_atom_coordinates: np.ndarray,
+    peptide_atom_residue_indexes: np.ndarray,
+    peptide_atom_b_factors: np.ndarray,
+    receptor_atom_coordinates: np.ndarray,
+    distance: float,
+    max_contact_atom_b_factor: float,
+) -> tuple[set[int], np.ndarray]:
+    """Find valid contact residues and the peptide atom B-factors that support them."""
+    receptor_tree = KDTree(receptor_atom_coordinates)
+    nearby_receptor_atoms_by_peptide_atom = receptor_tree.query_ball_point(
+        peptide_atom_coordinates,
+        r=distance,
+    )
+
+    valid_contact_residue_indexes = set()
+    valid_contact_atom_b_factors: list[float] = []
+    for peptide_atom_index, nearby_receptor_atom_indexes in enumerate(
+        nearby_receptor_atoms_by_peptide_atom
+    ):
+        if not nearby_receptor_atom_indexes:
+            continue
+        peptide_atom_b_factor = peptide_atom_b_factors[peptide_atom_index]
+        if peptide_atom_b_factor > max_contact_atom_b_factor:
+            continue
+        valid_contact_residue_indexes.add(
+            int(peptide_atom_residue_indexes[peptide_atom_index])
+        )
+        valid_contact_atom_b_factors.append(float(peptide_atom_b_factor))
+
+    return (
+        valid_contact_residue_indexes,
+        np.asarray(valid_contact_atom_b_factors, dtype=np.float32),
+    )
+
+
+def count_finite_residues(structure: np.ndarray) -> int:
+    """Count residues with at least one finite atom coordinate."""
+    finite_atom_mask = cast(np.ndarray, np.isfinite(structure).all(axis=2))
+    return sum(1 for residue_atom_mask in finite_atom_mask if residue_atom_mask.any())
+
+
 def calculate_binding_metrics(
     peptide: ChainData,
     receptor: ChainData,
@@ -211,6 +262,64 @@ def calculate_binding_metrics(
         receptor_atoms=len(receptor_atoms),
         valid_contact_residues=valid_contact_residues,
         valid_contact_fraction=valid_contact_fraction,
+    )
+
+
+def calculate_best_pair_metrics(
+    peptide: ChainData,
+    receptor: ChainData,
+    distance: float,
+    max_contact_atom_b_factor: float,
+) -> BestPairMetrics:
+    peptide_structure = cast(np.ndarray, peptide["structure"])
+    peptide_b_factors = cast(np.ndarray, peptide["b_factors"])
+    receptor_structure = cast(np.ndarray, receptor["structure"])
+    peptide_residues = len(peptide["sequence"])
+
+    (
+        peptide_atoms,
+        peptide_residue_indexes,
+        peptide_atom_b_factors,
+    ) = collect_finite_peptide_atom_data(
+        structure=peptide_structure,
+        b_factors=peptide_b_factors,
+    )
+    receptor_atoms, _receptor_residue_indexes = collect_finite_atom_coordinates(
+        receptor_structure
+    )
+    finite_peptide_residues = count_finite_residues(peptide_structure)
+
+    if peptide_atoms.size == 0 or receptor_atoms.size == 0:
+        return BestPairMetrics(
+            valid_contact_residues=0,
+            valid_contact_fraction=0.0,
+            mean_valid_contact_atom_b_factor=float("inf"),
+            finite_peptide_residues=finite_peptide_residues,
+            receptor_residues=len(receptor["sequence"]),
+        )
+
+    valid_contact_residue_indexes, valid_contact_atom_b_factors = (
+        collect_valid_contact_data(
+            peptide_atom_coordinates=peptide_atoms,
+            peptide_atom_residue_indexes=peptide_residue_indexes,
+            peptide_atom_b_factors=peptide_atom_b_factors,
+            receptor_atom_coordinates=receptor_atoms,
+            distance=distance,
+            max_contact_atom_b_factor=max_contact_atom_b_factor,
+        )
+    )
+    valid_contact_residues = len(valid_contact_residue_indexes)
+    valid_contact_fraction = valid_contact_residues / peptide_residues
+    mean_valid_contact_atom_b_factor = float("inf")
+    if valid_contact_atom_b_factors.size > 0:
+        mean_valid_contact_atom_b_factor = float(valid_contact_atom_b_factors.mean())
+
+    return BestPairMetrics(
+        valid_contact_residues=valid_contact_residues,
+        valid_contact_fraction=valid_contact_fraction,
+        mean_valid_contact_atom_b_factor=mean_valid_contact_atom_b_factor,
+        finite_peptide_residues=finite_peptide_residues,
+        receptor_residues=len(receptor["sequence"]),
     )
 
 

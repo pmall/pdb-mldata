@@ -326,3 +326,66 @@ Parameters:
 - Minimum standard peptide-chain residues: `4`.
 - Maximum non-standard peptide-chain residue fraction: `0.2`.
 - Optional processing limit for testing: process only `N` entries.
+
+### 4.5 `curation/select_best_pairs`
+
+Goal: deduplicate chain-level peptide/receptor pairs by keeping one deterministic best pair for each peptide entity.
+
+This script changes the storage schema because each retained record now represents one selected peptide-chain/receptor-chain pair for one peptide entity. It reads one LMDB, ranks pairs under each peptide entity, and writes a new LMDB.
+
+Current rules:
+
+- Read binding-filtered pairs from `data/pdb_mldata_binding.lmdb`.
+- Write selected pairs to `data/pdb_mldata_best_pair.lmdb`.
+- Delete an existing output LMDB folder before writing to avoid errors caused by LMDB upsert behavior.
+- Fail clearly if an input peptide entity has no pairs.
+- Keep exactly one pair per peptide entity.
+- Rank pairs by most valid peptide contact residues.
+- Then rank by highest valid contact fraction.
+- Then rank by lowest mean B-factor among valid peptide contact atoms.
+- Then rank by most finite peptide residues.
+- Then rank by shorter receptor sequence.
+- Use stable chain IDs as the final deterministic tie-breaker.
+
+Output schema:
+
+```json
+{
+  "pdb_id": "",
+  "pairs": [
+    {
+      "entity": {
+        "entity_id": "",
+        "sequence": "",
+        "residue_names": []
+      },
+      "peptide": {
+        "entity_id": "",
+        "chain": "",
+        "sequence": "",
+        "residue_names": [],
+        "structure": "<bytes>",
+        "b_factors": "<bytes>",
+        "occupancy": "<bytes>"
+      },
+      "receptor": {
+        "entity_id": "",
+        "chain": "",
+        "sequence": "",
+        "residue_names": [],
+        "structure": "<bytes>",
+        "b_factors": "<bytes>",
+        "occupancy": "<bytes>"
+      }
+    }
+  ]
+}
+```
+
+Parameters:
+
+- Input LMDB database folder path: `data/pdb_mldata_binding.lmdb`.
+- Output LMDB database folder path: `data/pdb_mldata_best_pair.lmdb`.
+- Distance threshold: `5.0`.
+- Maximum contact peptide-atom B-factor: `70.0`.
+- Optional processing limit for testing: process only `N` entries.
