@@ -300,6 +300,11 @@ Current rules:
 
 - Read parsed pairs from `data/pdb_mldata.lmdb`.
 - Write accepted pairs to `data/pdb_mldata_binding.lmdb`.
+- Apply peptide-chain content filtering before distance/contact filtering.
+- Treat only `ACDEFGHIKLMNPQRSTVWY` as standard one-letter amino-acid codes for this curation filter.
+- Reject a pair when the peptide chain has fewer than 4 standard amino-acid residues.
+- Reject a pair when more than 20 percent of peptide-chain residues are non-standard one-letter codes.
+- Count `X`, `U`, and any other one-letter code outside the standard alphabet as non-standard.
 - Use all finite atom coordinates from the stored 37-atom arrays.
 - A peptide residue counts as contacting the receptor when any stored peptide atom is within 5 Angstroms of any stored receptor atom and that same peptide atom has B-factor less than or equal to 70.
 - Keep a pair only when at least 4 peptide residues have a qualifying contact atom.
@@ -309,7 +314,6 @@ Current rules:
 - Drop peptide entities with no accepted pairs.
 - Drop entries with no accepted peptide entities.
 - Keep all accepted pairs; do not select the best chain pair in this script.
-- Additional subjective filters, such as filtering chains with too many `X` residues, must be studied before being added.
 
 Parameters:
 
@@ -319,4 +323,6 @@ Parameters:
 - Minimum contacting peptide residues: `4`.
 - Minimum contacting peptide residue fraction: `0.5`.
 - Maximum contact peptide-atom B-factor: `70.0`.
+- Minimum standard peptide-chain residues: `4`.
+- Maximum non-standard peptide-chain residue fraction: `0.2`.
 - Optional processing limit for testing: process only `N` entries.

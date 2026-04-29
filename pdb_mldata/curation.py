@@ -8,6 +8,29 @@ from scipy.spatial import KDTree
 
 from pdb_mldata.lmdb_utils import ChainData, PairData
 
+STANDARD_AMINO_ACID_CODES = frozenset("ACDEFGHIKLMNPQRSTVWY")
+
+
+@dataclass(frozen=True)
+class PeptideContentMetrics:
+    peptide_residues: int
+    standard_residues: int
+    nonstandard_residues: int
+
+
+@dataclass(frozen=True)
+class PeptideContentFilter:
+    min_standard_residues: int
+    max_nonstandard_fraction: float
+    standard_codes: frozenset[str] = STANDARD_AMINO_ACID_CODES
+
+
+@dataclass(frozen=True)
+class PeptideContentDecision:
+    is_accepted: bool
+    reason: str
+    metrics: PeptideContentMetrics
+
 
 @dataclass(frozen=True)
 class BindingMetrics:
@@ -31,6 +54,51 @@ class BindingDecision:
     is_accepted: bool
     reason: str
     metrics: BindingMetrics
+
+
+def calculate_peptide_content_metrics(
+    peptide_sequence: str,
+    standard_codes: frozenset[str],
+) -> PeptideContentMetrics:
+    standard_residues = sum(
+        1 for residue in peptide_sequence if residue in standard_codes
+    )
+    peptide_residues = len(peptide_sequence)
+    return PeptideContentMetrics(
+        peptide_residues=peptide_residues,
+        standard_residues=standard_residues,
+        nonstandard_residues=peptide_residues - standard_residues,
+    )
+
+
+def evaluate_peptide_content(
+    peptide_sequence: str,
+    peptide_content_filter: PeptideContentFilter,
+) -> PeptideContentDecision:
+    metrics = calculate_peptide_content_metrics(
+        peptide_sequence=peptide_sequence,
+        standard_codes=peptide_content_filter.standard_codes,
+    )
+    if metrics.standard_residues < peptide_content_filter.min_standard_residues:
+        return PeptideContentDecision(
+            is_accepted=False,
+            reason="peptide_content_fewer_than_4_standard_aa",
+            metrics=metrics,
+        )
+    if (
+        metrics.nonstandard_residues
+        > metrics.peptide_residues * peptide_content_filter.max_nonstandard_fraction
+    ):
+        return PeptideContentDecision(
+            is_accepted=False,
+            reason="peptide_content_too_many_nonstandard_aa",
+            metrics=metrics,
+        )
+    return PeptideContentDecision(
+        is_accepted=True,
+        reason="accepted",
+        metrics=metrics,
+    )
 
 
 def collect_finite_atom_coordinates(

@@ -11,7 +11,12 @@ import lmdb
 import msgpack
 from tqdm import tqdm
 
-from pdb_mldata.curation import BindingFilter, evaluate_binding_pair
+from pdb_mldata.curation import (
+    BindingFilter,
+    PeptideContentFilter,
+    evaluate_binding_pair,
+    evaluate_peptide_content,
+)
 from pdb_mldata.lmdb_utils import (
     EntityData,
     LmdbEntry,
@@ -26,6 +31,8 @@ DEFAULT_DISTANCE = 5.0
 DEFAULT_MIN_CONTACT_RESIDUES = 4
 DEFAULT_MIN_CONTACT_FRACTION = 0.5
 DEFAULT_MAX_CONTACT_ATOM_B_FACTOR = 70.0
+DEFAULT_MIN_STANDARD_PEPTIDE_RESIDUES = 4
+DEFAULT_MAX_NONSTANDARD_PEPTIDE_FRACTION = 0.2
 
 
 @dataclass
@@ -51,6 +58,7 @@ def decode_pair_for_metrics(pair: PairData) -> PairData:
 
 def filter_entity_pairs(
     entity: EntityData,
+    peptide_content_filter: PeptideContentFilter,
     binding_filter: BindingFilter,
     stats: BindingFilterStats,
 ) -> EntityData | None:
@@ -58,6 +66,15 @@ def filter_entity_pairs(
 
     for pair in entity["pairs"]:
         stats.pairs_read += 1
+        peptide_content_decision = evaluate_peptide_content(
+            peptide_sequence=pair["peptide"]["sequence"],
+            peptide_content_filter=peptide_content_filter,
+        )
+        if not peptide_content_decision.is_accepted:
+            stats.rejected_pairs += 1
+            stats.rejection_reasons[peptide_content_decision.reason] += 1
+            continue
+
         decoded_pair = decode_pair_for_metrics(pair)
         decision = evaluate_binding_pair(
             pair=decoded_pair,
@@ -84,6 +101,7 @@ def filter_entity_pairs(
 
 def filter_lmdb_entry(
     entry: LmdbEntry,
+    peptide_content_filter: PeptideContentFilter,
     binding_filter: BindingFilter,
     stats: BindingFilterStats,
 ) -> LmdbEntry | None:
@@ -94,6 +112,7 @@ def filter_lmdb_entry(
     for entity in entry["entities"]:
         filtered_entity = filter_entity_pairs(
             entity=entity,
+            peptide_content_filter=peptide_content_filter,
             binding_filter=binding_filter,
             stats=stats,
         )
@@ -117,6 +136,7 @@ def unpack_lmdb_entry(entry_bytes: bytes) -> LmdbEntry:
 def build_binding_filtered_lmdb(
     input_path: Path,
     output_path: Path,
+    peptide_content_filter: PeptideContentFilter,
     binding_filter: BindingFilter,
     limit: int | None,
 ) -> BindingFilterStats:
@@ -142,6 +162,7 @@ def build_binding_filtered_lmdb(
             entry = unpack_lmdb_entry(cast(bytes, value))
             filtered_entry = filter_lmdb_entry(
                 entry=entry,
+                peptide_content_filter=peptide_content_filter,
                 binding_filter=binding_filter,
                 stats=stats,
             )
@@ -172,6 +193,8 @@ def validate_parameters(
     min_contact_residues: int,
     min_contact_fraction: float,
     max_contact_atom_b_factor: float,
+    min_standard_peptide_residues: int,
+    max_nonstandard_peptide_fraction: float,
     limit: int | None,
 ) -> None:
     """Validate CLI parameters before destructive LMDB creation starts."""
@@ -191,6 +214,12 @@ def validate_parameters(
         raise ValueError("--min-contact-fraction must be greater than 0 and at most 1")
     if max_contact_atom_b_factor <= 0:
         raise ValueError("--max-contact-atom-b-factor must be greater than 0")
+    if min_standard_peptide_residues < 1:
+        raise ValueError("--min-standard-peptide-residues must be at least 1")
+    if not (0 <= max_nonstandard_peptide_fraction <= 1):
+        raise ValueError(
+            "--max-nonstandard-peptide-fraction must be at least 0 and at most 1"
+        )
     if limit is not None and limit < 1:
         raise ValueError("--limit must be at least 1 when provided")
 
@@ -201,6 +230,8 @@ def print_stats(stats: BindingFilterStats, output_path: Path) -> None:
     print(f"Peptide entities: {stats.entities_read} -> {stats.entities_written}")
     print(f"Peptide/receptor chain pairs: {stats.pairs_read} -> {stats.pairs_written}")
     print(f"Rejected peptide/receptor chain pairs: {stats.rejected_pairs}")
+    for reason, count in stats.rejection_reasons.most_common():
+        print(f"Rejected {reason}: {count}")
 
 
 def main() -> None:
@@ -249,6 +280,18 @@ def main() -> None:
         help="Maximum B-factor for a peptide atom to count as a contact (default: 70.0)",
     )
     parser.add_argument(
+        "--min-standard-peptide-residues",
+        type=int,
+        default=DEFAULT_MIN_STANDARD_PEPTIDE_RESIDUES,
+        help="Minimum standard amino acids in the peptide chain (default: 4)",
+    )
+    parser.add_argument(
+        "--max-nonstandard-peptide-fraction",
+        type=float,
+        default=DEFAULT_MAX_NONSTANDARD_PEPTIDE_FRACTION,
+        help="Maximum non-standard peptide-chain residue fraction (default: 0.2)",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -264,6 +307,8 @@ def main() -> None:
             min_contact_residues=args.min_contact_residues,
             min_contact_fraction=args.min_contact_fraction,
             max_contact_atom_b_factor=args.max_contact_atom_b_factor,
+            min_standard_peptide_residues=args.min_standard_peptide_residues,
+            max_nonstandard_peptide_fraction=args.max_nonstandard_peptide_fraction,
             limit=args.limit,
         )
     except ValueError as exc:
@@ -272,6 +317,10 @@ def main() -> None:
     stats = build_binding_filtered_lmdb(
         input_path=args.input_path,
         output_path=args.output_path,
+        peptide_content_filter=PeptideContentFilter(
+            min_standard_residues=args.min_standard_peptide_residues,
+            max_nonstandard_fraction=args.max_nonstandard_peptide_fraction,
+        ),
         binding_filter=BindingFilter(
             distance=args.distance,
             min_contact_residues=args.min_contact_residues,
