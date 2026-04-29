@@ -1,9 +1,51 @@
-"""
-PDB Biological Assembly Parser & LMDB Builder.
+"""Build the raw peptide/receptor pair LMDB from downloaded assemblies.
 
-The identification logic uses mmCIF label subchains end-to-end. We do not
-merge author chains. Common terminal caps are trimmed from entity and chain
-sequences, while internal non-standard residues are retained.
+Goal:
+- Read biological assemblies from `data/assemblies.zip`.
+- Parse each assembly with Gemmi.
+- Write peptide entity records and chain-level peptide/receptor pairs to
+  `data/pdb_mldata.lmdb`.
+
+Selection and parsing rules:
+- Use mmCIF label subchains end-to-end; do not merge author chains.
+- Skip multi-model entries, including NMR entries.
+- Trim common terminal caps from protein entity and observed chain sequences.
+- Keep trimmed protein entities as peptide entities when their normalized
+  entity sequence length is between 4 and 32 residues.
+- Keep internal non-standard amino acids.
+- Normalize sequences only through Gemmi parser APIs.
+- Do not manually parse mmCIF parent fields or infer parent amino acids.
+- Normalize residues Gemmi cannot convert to a one-letter amino-acid code to `X`.
+- Store exact retained 3-letter residue names beside normalized sequences.
+- For each peptide chain, identify other chains within 5 Angstroms using
+  `scipy.spatial.KDTree`.
+- Water and explicitly defined non-polymer ligand chains do not count as
+  receptor neighbors.
+- Save a pair only when the peptide chain has exactly one meaningful
+  neighboring chain and that neighbor is a protein chain.
+- If an entry produces duplicate peptide-chain/receptor-chain pair keys, skip
+  the whole entry as malformed.
+- Do not collapse duplicate pairs to force an entry into the LMDB.
+
+Structure rules:
+- Entity sequences represent ideal PDB entity sequences.
+- Chain sequences and structures represent observed assembly chains.
+- Structures are trimmed with their observed chain sequences.
+- Structure arrays store 37 AlphaFold atom positions; extra atoms on
+  non-standard amino acids are discarded.
+
+Output behavior:
+- Delete an existing output LMDB folder before writing to avoid LMDB upsert
+  issues.
+- See `docs/storage_schemas.md` for the raw/binding LMDB schema.
+
+Default parameters:
+- Assemblies ZIP: `data/assemblies.zip`.
+- Output LMDB: `data/pdb_mldata.lmdb`.
+- Minimum peptide length: 4.
+- Maximum peptide length: 32.
+- Distance threshold: 5.0 Angstroms.
+- Optional `--limit` for smoke verification.
 """
 
 from __future__ import annotations

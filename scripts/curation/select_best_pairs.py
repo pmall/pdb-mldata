@@ -1,3 +1,35 @@
+"""Select one deterministic best peptide/receptor pair per peptide entity.
+
+Goal:
+- Read binding-filtered pairs from `data/pdb_mldata_binding.lmdb`.
+- Rank all saved chain-level pairs under each peptide entity.
+- Write one selected pair per peptide entity to `data/pdb_mldata_best_pair.lmdb`.
+
+Ranking rules:
+- Fail clearly if an input peptide entity has no pairs.
+- Prefer the pair with the most valid peptide contact residues.
+- Then prefer the highest valid contact fraction.
+- Then prefer the lowest mean B-factor among valid peptide contact atoms.
+- Then prefer the most finite peptide residues.
+- Then prefer the shorter receptor sequence.
+- Use stable IDs as the final deterministic tie-breaker: peptide chain ID,
+  receptor entity ID, then receptor chain ID.
+
+Output behavior:
+- Delete an existing output LMDB folder before writing to avoid LMDB upsert
+  issues.
+- The output schema changes because each retained record now represents one
+  selected peptide-chain/receptor-chain pair for one peptide entity.
+- See `docs/storage_schemas.md` for the best-pair LMDB schema.
+
+Default parameters:
+- Input LMDB: `data/pdb_mldata_binding.lmdb`.
+- Output LMDB: `data/pdb_mldata_best_pair.lmdb`.
+- Distance threshold: 5.0 Angstroms.
+- Maximum contact peptide-atom B-factor: 70.0.
+- Optional `--limit` for smoke verification.
+"""
+
 from __future__ import annotations
 
 import argparse

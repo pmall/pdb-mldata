@@ -1,3 +1,20 @@
+"""Fetch candidate PDB entry IDs for the peptide/receptor pipeline.
+
+Goal:
+- Query the RCSB search API and write matching PDB IDs to `data/metadata.csv`.
+
+Selection criteria:
+- PDB entry has at least two protein entities.
+- PDB entry has at least one protein entity with length from 4 to 40 residues.
+- The upper bound is 40 here, rather than the final peptide maximum of 32, so
+  downstream cap trimming can still recover capped 32-residue peptides.
+
+Default parameters:
+- Output metadata CSV: `data/metadata.csv`.
+- Minimum query length: 4.
+- Maximum query length: 40.
+"""
+
 import argparse
 import csv
 import sys

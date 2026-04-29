@@ -126,7 +126,7 @@ For data-processing or pipeline script verification:
 - Consumers of internal data must not repair, infer, deduplicate, or silently skip malformed internal data.
 - Any inconsistency in internal data is a bug signal; downstream scripts must fail clearly so the source can be fixed.
 
-## 3. Domain And Storage Contract
+## 3. Domain Overview
 
 ### 3.1 Project Goal
 
@@ -136,256 +136,28 @@ A peptide is a protein entity with length between 4 and 32 amino acids after tri
 
 A receptor is another protein entity within 5 Angstroms of the peptide entity. It must be the only other meaningful chain in the peptide neighborhood. Meaningless ligand chains, such as water and the ligand chains defined in the LMDB-building script, do not count as receptor neighbors.
 
-The final structure is hierarchical because of the structure of the PDB:
+The source PDB structure is hierarchical:
 
 - PDB entry: entry-level record.
-- Peptide entity: a PDB entry may have many peptide entities with at least one valid receptor.
-- Pair: a peptide entity may have many chain-level peptide/receptor pairs.
+- Peptide entity: one ideal PDB entity sequence.
+- Pair: one observed peptide-chain/receptor-chain realization.
 
-### 3.2 Sequence And Structure Rules
+### 3.2 Documentation Locations
 
-- For sequences, trim the usual caps on both C-terminus and N-terminus.
-- For structures, extract the 37 amino-acid atom 3D positions and store them sorted according to the AlphaFold convention.
-- Store residue-level quality values:
-  - B-factor.
-  - Occupancy.
-
-### 3.3 Storage Conventions
-
-- Structure coordinates are stored as `float16` bytes.
-- B-factors are stored as `uint8` bytes.
-- Occupancy values are multiplied by 100 and stored as `uint8` bytes.
-- The value `255` is the `NaN`/`None` sentinel for `uint8` arrays.
-- Entries are serialized with `msgpack.packb`.
-- Encoding and decoding conventions for LMDB entries must live in `pdb_mldata/lmdb_utils.py`.
-- Use the shared LMDB encoder and decoder instead of duplicating serialization logic in scripts.
-
-### 3.4 LMDB Entry Schema
-
-```json
-{
-  "pdb_id": "",
-  "entities": [
-    {
-      "entity_id": "",
-      "sequence": "",
-      "residue_names": [],
-      "pairs": [
-        {
-          "peptide": {
-            "entity_id": "",
-            "chain": "",
-            "sequence": "",
-            "residue_names": [],
-            "structure": "<bytes>",
-            "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
-          },
-          "receptor": {
-            "entity_id": "",
-            "chain": "",
-            "sequence": "",
-            "residue_names": [],
-            "structure": "<bytes>",
-            "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
-          }
-        }
-      ]
-    }
-  ]
-}
-```
-
-Schema details:
-
-- `pdb_id`: PDB identifier.
-- `entities`: one entry per peptide entity.
-- `entity_id`: PDB entity identifier.
-- `sequence`: entity or raw chain sequence, depending on the object.
-- `residue_names`: exact retained 3-letter residue names after cap trimming.
-- `pairs`: one entry per peptide-chain/receptor-chain pair.
-- `structure`: `float16 [N, 37, 3]` serialized with `.tobytes()`.
-- `b_factors`: `uint8 [N, 37]` serialized with `.tobytes()`, where `255` means missing.
-- `occupancy`: `uint8 [N, 37]` serialized with `.tobytes()`, where occupancy was multiplied by 100 and `255` means missing.
+- Storage schemas and binary encoding conventions live in `docs/storage_schemas.md`.
+- Shared LMDB encoder and decoder implementations live in `pdb_mldata/lmdb_utils.py`.
+- Detailed script-specific data strategy lives in each script's top module docstring.
+- Broad data-strategy changes must be reflected here; script-specific rule changes must be documented in the owning script docstring before implementation.
+- Schema changes must be documented in `docs/storage_schemas.md` before implementation.
 
 ## 4. Pipeline
 
-There are currently three core data-building scripts. Viewer database scripts live under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer database details. Subjective dataset-selection scripts live under `scripts/curation/`.
+Core data-building scripts live under `scripts/`. Subjective dataset-selection scripts live under `scripts/curation/`. Viewer database scripts live under `scripts/viewer/`; see `scripts/viewer/README.md` for sidecar viewer database details.
 
-### 4.1 `fetch_metadata`
-
-Goal: query the PDB API and write all matching PDB entity IDs to a metadata CSV file.
-
-Selection criteria:
-
-- PDB entry has at least two protein entities.
-- PDB entry has at least one peptide entity.
-- For this query only, a peptide is a protein entity with length between 4 and 40 amino acids.
-- The upper bound is 40 instead of 32 to include 32 amino-acid peptides with possible C-terminal or N-terminal caps.
-- The value 40 may be adjusted later after studying logs from downstream scripts.
-
-Parameters:
-
-- Metadata CSV file path: `data/metadata.csv`.
-- Minimum peptide length: `4`.
-- Maximum peptide length: `40`.
-
-### 4.2 `download_assemblies`
-
-Goal: download the PDB entries retrieved by `fetch_metadata`.
-
-Download rules:
-
-- Download the first biological assembly only.
-- Use the first biological assembly because it is curated data.
-- Store all downloaded gz files in one ZIP archive.
-- Do not write thousands of assembly files directly into a folder.
-
-Parameters:
-
-- Metadata CSV file path: `data/metadata.csv`.
-- Assemblies ZIP file path: `data/assemblies.zip`.
-
-### 4.3 `build_lmdb`
-
-Goal: parse all biological assemblies downloaded by `download_assemblies` with `gemmi` and build the LMDB database.
-
-This script owns the main data filters. These filters will be updated carefully over time after rejection logs are studied.
-
-Current rules:
-
-- Read assemblies from `data/assemblies.zip`.
-- Skip multi-model entries, including NMR entries.
-- Trim common terminal caps from all protein entity sequences and observed protein chain sequences.
-- Keep trimmed protein entities as peptide entities when their normalized entity sequence length is between 4 and 32 amino acids.
-- Keep non-standard amino acids instead of rejecting peptide entities.
-- Normalize sequences only through Gemmi parser APIs.
-- Do not manually parse mmCIF parent fields or infer parent amino acids.
-- Normalize residues that Gemmi cannot convert to a one-letter amino-acid code to `X`.
-- Store exact retained 3-letter residue names alongside normalized entity, peptide-chain, and receptor-chain sequences.
-- For each chain of each peptide entity, use `scipy.spatial.KDTree` to identify all other chains in a 5 Angstrom neighborhood.
-- Water and explicitly defined non-polymer ligand chains do not count as neighbors.
-- If the peptide chain has exactly one meaningful neighboring chain and that chain is a protein chain, save the pair under the peptide entity.
-- If an entry produces duplicate peptide-chain/receptor-chain pair keys, skip the whole entry as malformed.
-- Do not collapse duplicate pairs to force an entry into the LMDB.
-- SQL export scripts must fail on duplicate pair keys in the LMDB; export is validation and publication, not cleanup.
-- Skip entries that do not satisfy these rules.
-- Existing LMDB database folders must be deleted before writing a new LMDB database to avoid errors caused by LMDB upsert behavior.
-- Entity sequences represent the ideal PDB entity sequence, while chain sequences and structures represent observed assembly chains; do not replace entity sequences with chain consensus.
-- Structures are trimmed with their observed chain sequences and store only the 37 AlphaFold amino-acid atom positions. Extra atoms on non-standard amino acids are discarded.
-
-Work in progress:
-
-- Protein-chain processing will be updated in future iterations.
-- Non-standard amino-acid handling will be updated in future iterations.
-- Any strategy change must be documented in this file before implementation.
-
-Parameters:
-
-- Assemblies ZIP file path: `data/assemblies.zip`.
-- LMDB database folder path: `data/pdb_mldata.lmdb`.
-- Minimum peptide length: `4`.
-- Maximum peptide length: `32`.
-- Distance threshold: `5.0`.
-- Optional processing limit for testing: process only `N` entries.
-
-### 4.4 `curation/filter_binding_pairs`
-
-Goal: apply the first subjective curation filter to the chain-level peptide/receptor pairs saved by `build_lmdb`.
-
-This script does not change the storage schema. It reads one LMDB, removes chain pairs that do not look like useful peptide/receptor binding samples under the current curation rule, and writes a new LMDB with the same entry schema.
-
-Current rules:
-
-- Read parsed pairs from `data/pdb_mldata.lmdb`.
-- Write accepted pairs to `data/pdb_mldata_binding.lmdb`.
-- Apply peptide-chain content filtering before distance/contact filtering.
-- Treat only `ACDEFGHIKLMNPQRSTVWY` as standard one-letter amino-acid codes for this curation filter.
-- Reject a pair when the peptide chain has fewer than 4 standard amino-acid residues.
-- Reject a pair when more than 20 percent of peptide-chain residues are non-standard one-letter codes.
-- Count `X`, `U`, and any other one-letter code outside the standard alphabet as non-standard.
-- Use all finite atom coordinates from the stored 37-atom arrays.
-- A peptide residue counts as contacting the receptor when any stored peptide atom is within 5 Angstroms of any stored receptor atom and that same peptide atom has B-factor less than or equal to 70.
-- Keep a pair only when at least 4 peptide residues have a qualifying contact atom.
-- Keep a pair only when at least half of the peptide residues have a qualifying contact atom.
-- Do not use occupancy in this curation rule.
-- Reject pairs with no usable peptide or receptor coordinates.
-- Drop peptide entities with no accepted pairs.
-- Drop entries with no accepted peptide entities.
-- Keep all accepted pairs; do not select the best chain pair in this script.
-
-Parameters:
-
-- Input LMDB database folder path: `data/pdb_mldata.lmdb`.
-- Output LMDB database folder path: `data/pdb_mldata_binding.lmdb`.
-- Distance threshold: `5.0`.
-- Minimum contacting peptide residues: `4`.
-- Minimum contacting peptide residue fraction: `0.5`.
-- Maximum contact peptide-atom B-factor: `70.0`.
-- Minimum standard peptide-chain residues: `4`.
-- Maximum non-standard peptide-chain residue fraction: `0.2`.
-- Optional processing limit for testing: process only `N` entries.
-
-### 4.5 `curation/select_best_pairs`
-
-Goal: deduplicate chain-level peptide/receptor pairs by keeping one deterministic best pair for each peptide entity.
-
-This script changes the storage schema because each retained record now represents one selected peptide-chain/receptor-chain pair for one peptide entity. It reads one LMDB, ranks pairs under each peptide entity, and writes a new LMDB.
-
-Current rules:
-
-- Read binding-filtered pairs from `data/pdb_mldata_binding.lmdb`.
-- Write selected pairs to `data/pdb_mldata_best_pair.lmdb`.
-- Delete an existing output LMDB folder before writing to avoid errors caused by LMDB upsert behavior.
-- Fail clearly if an input peptide entity has no pairs.
-- Keep exactly one pair per peptide entity.
-- Rank pairs by most valid peptide contact residues.
-- Then rank by highest valid contact fraction.
-- Then rank by lowest mean B-factor among valid peptide contact atoms.
-- Then rank by most finite peptide residues.
-- Then rank by shorter receptor sequence.
-- Use stable chain IDs as the final deterministic tie-breaker.
-
-Output schema:
-
-```json
-{
-  "pdb_id": "",
-  "pairs": [
-    {
-      "entity": {
-        "entity_id": "",
-        "sequence": "",
-        "residue_names": []
-      },
-      "peptide": {
-        "entity_id": "",
-        "chain": "",
-        "sequence": "",
-        "residue_names": [],
-        "structure": "<bytes>",
-        "b_factors": "<bytes>",
-        "occupancy": "<bytes>"
-      },
-      "receptor": {
-        "entity_id": "",
-        "chain": "",
-        "sequence": "",
-        "residue_names": [],
-        "structure": "<bytes>",
-        "b_factors": "<bytes>",
-        "occupancy": "<bytes>"
-      }
-    }
-  ]
-}
-```
-
-Parameters:
-
-- Input LMDB database folder path: `data/pdb_mldata_binding.lmdb`.
-- Output LMDB database folder path: `data/pdb_mldata_best_pair.lmdb`.
-- Distance threshold: `5.0`.
-- Maximum contact peptide-atom B-factor: `70.0`.
-- Optional processing limit for testing: process only `N` entries.
+| Stage | Script | Input | Output | Details |
+| --- | --- | --- | --- | --- |
+| Metadata fetch | `scripts/fetch_metadata.py` | RCSB API | `data/metadata.csv` | Script docstring |
+| Assembly download | `scripts/download_assemblies.py` | `data/metadata.csv` | `data/assemblies.zip` | Script docstring |
+| Raw LMDB build | `scripts/build_lmdb.py` | `data/assemblies.zip` | `data/pdb_mldata.lmdb` | Script docstring |
+| Binding curation | `scripts/curation/filter_binding_pairs.py` | `data/pdb_mldata.lmdb` | `data/pdb_mldata_binding.lmdb` | Script docstring |
+| Best-pair curation | `scripts/curation/select_best_pairs.py` | `data/pdb_mldata_binding.lmdb` | `data/pdb_mldata_best_pair.lmdb` | Script docstring |

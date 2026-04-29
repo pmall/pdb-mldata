@@ -1,3 +1,47 @@
+"""Filter raw peptide/receptor pairs into the binding-curated LMDB.
+
+Goal:
+- Read chain-level pairs from `data/pdb_mldata.lmdb`.
+- Reject pairs that do not look like useful peptide/receptor binding samples.
+- Write accepted pairs to `data/pdb_mldata_binding.lmdb` with the same schema.
+
+Filtering rules:
+- Apply peptide-chain content filtering before distance/contact filtering.
+- Treat only `ACDEFGHIKLMNPQRSTVWY` as standard one-letter amino-acid codes.
+- Reject pairs whose peptide chain has fewer than 4 standard amino-acid residues.
+- Reject pairs whose peptide chain has more than 20 percent non-standard
+  one-letter codes.
+- Count `X`, `U`, and every other code outside the standard alphabet as
+  non-standard.
+- Use all finite atom coordinates from the stored 37-atom arrays for contact
+  evaluation.
+- A peptide residue counts as contacting the receptor when any stored peptide
+  atom is within 5 Angstroms of any stored receptor atom and that same peptide
+  atom has B-factor less than or equal to 70.
+- Keep a pair only when at least 4 peptide residues and at least half of peptide
+  residues have qualifying contact atoms.
+- Do not use occupancy in this curation rule.
+- Reject pairs with no usable peptide or receptor coordinates.
+- Drop peptide entities and entries with no accepted pairs.
+- Keep all accepted pairs; this script does not select the best chain pair.
+
+Output behavior:
+- Delete an existing output LMDB folder before writing to avoid LMDB upsert
+  issues.
+- See `docs/storage_schemas.md` for the raw/binding LMDB schema.
+
+Default parameters:
+- Input LMDB: `data/pdb_mldata.lmdb`.
+- Output LMDB: `data/pdb_mldata_binding.lmdb`.
+- Distance threshold: 5.0 Angstroms.
+- Minimum contacting peptide residues: 4.
+- Minimum contacting peptide residue fraction: 0.5.
+- Maximum contact peptide-atom B-factor: 70.0.
+- Minimum standard peptide-chain residues: 4.
+- Maximum non-standard peptide-chain residue fraction: 0.2.
+- Optional `--limit` for smoke verification.
+"""
+
 from __future__ import annotations
 
 import argparse

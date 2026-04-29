@@ -1,3 +1,22 @@
+"""Download first biological assemblies for candidate PDB entries.
+
+Goal:
+- Read PDB IDs from `data/metadata.csv`.
+- Download the first biological assembly for each entry.
+- Store all downloaded `.cif.gz` files in one ZIP archive at
+  `data/assemblies.zip`.
+
+Download rules:
+- Use biological assembly 1 because it is curated assembly data.
+- Do not write thousands of assembly files directly into a folder.
+- Download through bounded worker threads and write ZIP members under a lock.
+
+Default parameters:
+- Metadata CSV: `data/metadata.csv`.
+- Assemblies ZIP: `data/assemblies.zip`.
+- Workers: 8.
+"""
+
 import argparse
 import csv
 import os
