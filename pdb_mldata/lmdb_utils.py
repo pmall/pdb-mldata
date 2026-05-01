@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypeAlias, TypedDict, cast
+from typing import NotRequired, TypeAlias, TypedDict, cast
 
 import numpy as np
 import msgpack
@@ -16,6 +16,11 @@ class ChainData(TypedDict):
     structure: BytePayload
     b_factors: BytePayload
     occupancy: BytePayload
+    interface_start: NotRequired[int]
+    interface_end: NotRequired[int]
+    contact_residues: NotRequired[int]
+    contact_fraction: NotRequired[float]
+    mean_contact_atom_b_factor: NotRequired[float]
 
 
 class PairData(TypedDict):
@@ -57,6 +62,11 @@ class ExportChainData(TypedDict):
     chain: str
     sequence: str
     residue_names: list[str]
+    interface_start: NotRequired[int]
+    interface_end: NotRequired[int]
+    contact_residues: NotRequired[int]
+    contact_fraction: NotRequired[float]
+    mean_contact_atom_b_factor: NotRequired[float]
 
 
 class ExportPairData(TypedDict):
@@ -99,12 +109,25 @@ def encode_best_pair_lmdb_entry(entry: BestPairLmdbEntry) -> bytes:
 
 def select_export_chain_data(chain_data: ChainData) -> ExportChainData:
     """Select chain fields needed by downstream database exports."""
-    return {
+    export_data: ExportChainData = {
         "entity_id": chain_data["entity_id"],
         "chain": chain_data["chain"],
         "sequence": chain_data["sequence"],
         "residue_names": chain_data["residue_names"],
     }
+    if "interface_start" in chain_data:
+        export_data["interface_start"] = chain_data["interface_start"]
+    if "interface_end" in chain_data:
+        export_data["interface_end"] = chain_data["interface_end"]
+    if "contact_residues" in chain_data:
+        export_data["contact_residues"] = chain_data["contact_residues"]
+    if "contact_fraction" in chain_data:
+        export_data["contact_fraction"] = chain_data["contact_fraction"]
+    if "mean_contact_atom_b_factor" in chain_data:
+        export_data["mean_contact_atom_b_factor"] = chain_data[
+            "mean_contact_atom_b_factor"
+        ]
+    return export_data
 
 
 def unpack_lmdb_entry_for_export(entry_bytes: bytes) -> ExportLmdbEntry:

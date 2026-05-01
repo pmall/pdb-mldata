@@ -9,15 +9,15 @@ Encoding and decoding helpers live in `pdb_mldata/lmdb_utils.py`.
 - B-factors are stored as `uint8` bytes.
 - Occupancy values are multiplied by 100 and stored as `uint8` bytes.
 - The `uint8` value `255` is the missing-value sentinel for B-factor and occupancy arrays.
-- Raw and binding LMDBs store 37 AlphaFold atom positions per residue.
-- The 37-atom order is defined by `ATOM_TYPES_37` in `scripts/build_lmdb.py`.
+- Raw LMDB stores 37 AlphaFold atom positions per residue.
+- The 37-atom order is defined by `ATOM_TYPES_37` in
+  `pdb_mldata/filtering_rules.py`.
 
-## Raw And Binding LMDB Schema
+## Raw LMDB Schema
 
 Artifacts:
 
 - `data/pdb_mldata.lmdb`
-- `data/pdb_mldata_binding.lmdb`
 
 Schema:
 
@@ -38,7 +38,12 @@ Schema:
             "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
+            "occupancy": "<bytes>",
+            "interface_start": 1,
+            "interface_end": 1,
+            "contact_residues": 0,
+            "contact_fraction": 0.0,
+            "mean_contact_atom_b_factor": 0.0
           },
           "receptor": {
             "entity_id": "",
@@ -47,7 +52,10 @@ Schema:
             "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
+            "occupancy": "<bytes>",
+            "interface_start": 1,
+            "interface_end": 1,
+            "contact_residues": 0
           }
         }
       ]
@@ -66,6 +74,13 @@ Schema notes:
 - `structure`: `float16 [N, 37, 3]`.
 - `b_factors`: `uint8 [N, 37]`, with `255` as missing.
 - `occupancy`: `uint8 [N, 37]`, with `255` as missing.
+- `interface_start` and `interface_end`: 1-based inclusive residue positions
+  relative to the trimmed observed chain sequence.
+- `contact_residues`: number of residues in that chain contacting the other
+  chain under the binding-contact rule.
+- Peptide-only `contact_fraction`: `contact_residues / peptide length`.
+- Peptide-only `mean_contact_atom_b_factor`: mean B-factor among valid peptide
+  contact atoms.
 
 Helpers:
 
@@ -98,7 +113,12 @@ Schema:
         "residue_names": [],
         "structure": "<bytes>",
         "b_factors": "<bytes>",
-        "occupancy": "<bytes>"
+        "occupancy": "<bytes>",
+        "interface_start": 1,
+        "interface_end": 1,
+        "contact_residues": 0,
+        "contact_fraction": 0.0,
+        "mean_contact_atom_b_factor": 0.0
       },
       "receptor": {
         "entity_id": "",
@@ -107,7 +127,10 @@ Schema:
         "residue_names": [],
         "structure": "<bytes>",
         "b_factors": "<bytes>",
-        "occupancy": "<bytes>"
+        "occupancy": "<bytes>",
+        "interface_start": 1,
+        "interface_end": 1,
+        "contact_residues": 0
       }
     }
   ]
@@ -123,6 +146,7 @@ Schema notes:
 - `structure`: `float16 [N, 37, 3]`.
 - `b_factors`: `uint8 [N, 37]`, with `255` as missing.
 - `occupancy`: `uint8 [N, 37]`, with `255` as missing.
+- Interface fields have the same meaning as in the raw LMDB schema.
 
 Helpers:
 

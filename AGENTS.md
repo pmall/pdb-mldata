@@ -132,9 +132,9 @@ For data-processing or pipeline script verification:
 
 This project builds an exhaustive repository of peptide/receptor pairs from the whole Protein Data Bank.
 
-A peptide is a protein entity with length between 4 and 32 amino acids after trimming usual N-terminal and C-terminal caps.
+A peptide is a protein entity with length between 4 and 32 amino acids after trimming usual N-terminal and C-terminal caps. Peptide sequences must contain at least 4 standard amino acids from `ACDEFGHIKLMNPQRSTVWY` and must contain at most 20 percent non-standard one-letter residue codes. Observed peptide chains must pass the same length and sequence-content rules after cap trimming to be stored as peptide/receptor pairs.
 
-A receptor is another protein entity within 5 Angstroms of the peptide entity. It must be the only other meaningful chain in the peptide neighborhood. Meaningless ligand chains, such as water and the ligand chains defined in the LMDB-building script, do not count as receptor neighbors.
+A receptor is another protein entity within 5 Angstroms of the peptide entity, with length at least 50 amino acids after trimming usual N-terminal and C-terminal caps. It must be the only other meaningful chain in the peptide neighborhood. Meaningless ligand chains, such as water and the ligand chains defined in the LMDB-building script, do not count as receptor neighbors. Protein chains shorter than the receptor minimum still count as meaningful neighborhood chains, but they cannot be selected as valid receptors. A stored pair must also pass the binding-contact rule: at least 4 peptide residues and at least half of peptide residues must contact the receptor through qualifying peptide atoms.
 
 The source PDB structure is hierarchical:
 
@@ -159,5 +159,5 @@ Core data-building scripts live under `scripts/`. Subjective dataset-selection s
 | Metadata fetch | `scripts/fetch_metadata.py` | RCSB API | `data/metadata.csv` | Script docstring |
 | Assembly download | `scripts/download_assemblies.py` | `data/metadata.csv` | `data/assemblies.zip` | Script docstring |
 | Raw LMDB build | `scripts/build_lmdb.py` | `data/assemblies.zip` | `data/pdb_mldata.lmdb` | Script docstring |
-| Binding curation | `scripts/curation/filter_binding_pairs.py` | `data/pdb_mldata.lmdb` | `data/pdb_mldata_binding.lmdb` | Script docstring |
-| Best-pair curation | `scripts/curation/select_best_pairs.py` | `data/pdb_mldata_binding.lmdb` | `data/pdb_mldata_best_pair.lmdb` | Script docstring |
+| Build rejection audit | `scripts/audit_build_rejections.py` | `data/metadata.csv`, `data/assemblies.zip`, `data/pdb_mldata.lmdb` | `data/build_rejection_audit/` | Diagnostic script docstring |
+| Best-pair curation | `scripts/curation/select_best_pairs.py` | `data/pdb_mldata.lmdb` | `data/pdb_mldata_best_pair.lmdb` | Script docstring |

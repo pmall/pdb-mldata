@@ -74,10 +74,14 @@ def create_schema(connection: sqlite3.Connection) -> None:
             peptide_chain_id TEXT NOT NULL,
             peptide_sequence TEXT NOT NULL,
             peptide_residue_names_json TEXT NOT NULL,
+            peptide_binding_start INTEGER NOT NULL,
+            peptide_binding_stop INTEGER NOT NULL,
             receptor_entity_id TEXT NOT NULL,
             receptor_chain_id TEXT NOT NULL,
             receptor_sequence TEXT NOT NULL,
             receptor_residue_names_json TEXT NOT NULL,
+            receptor_binding_start INTEGER NOT NULL,
+            receptor_binding_stop INTEGER NOT NULL,
             FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id),
             FOREIGN KEY (pdb_id, peptide_entity_id)
                 REFERENCES peptides (pdb_id, entity_id),
@@ -197,6 +201,25 @@ def fetch_pair_by_natural_key(
     )
 
 
+def require_binding_span(
+    chain: dict[str, object],
+    chain_name: str,
+) -> tuple[int, int]:
+    start = chain.get("interface_start")
+    stop = chain.get("interface_end")
+    sequence = chain.get("sequence")
+    if type(start) is not int or type(stop) is not int:
+        raise ValueError(f"{chain_name} binding span is missing from LMDB")
+    if not isinstance(sequence, str):
+        raise ValueError(f"{chain_name} sequence is missing from LMDB")
+    if not (1 <= start <= stop <= len(sequence)):
+        raise ValueError(
+            f"{chain_name} binding span {start}-{stop} is outside sequence length "
+            f"{len(sequence)}"
+        )
+    return start, stop
+
+
 def insert_pair(
     connection: sqlite3.Connection,
     pdb_id: str,
@@ -204,10 +227,14 @@ def insert_pair(
     peptide_chain_id: str,
     peptide_sequence: str,
     peptide_residue_names: list[str],
+    peptide_binding_start: int,
+    peptide_binding_stop: int,
     receptor_entity_id: str,
     receptor_chain_id: str,
     receptor_sequence: str,
     receptor_residue_names: list[str],
+    receptor_binding_start: int,
+    receptor_binding_stop: int,
 ) -> int:
     columns = (
         "pdb_id",
@@ -215,10 +242,14 @@ def insert_pair(
         "peptide_chain_id",
         "peptide_sequence",
         "peptide_residue_names_json",
+        "peptide_binding_start",
+        "peptide_binding_stop",
         "receptor_entity_id",
         "receptor_chain_id",
         "receptor_sequence",
         "receptor_residue_names_json",
+        "receptor_binding_start",
+        "receptor_binding_stop",
     )
     values = (
         pdb_id,
@@ -226,10 +257,14 @@ def insert_pair(
         peptide_chain_id,
         peptide_sequence,
         residue_names_json(peptide_residue_names),
+        peptide_binding_start,
+        peptide_binding_stop,
         receptor_entity_id,
         receptor_chain_id,
         receptor_sequence,
         residue_names_json(receptor_residue_names),
+        receptor_binding_start,
+        receptor_binding_stop,
     )
 
     existing_by_natural_key = fetch_pair_by_natural_key(
@@ -279,6 +314,14 @@ def export_entry(
         peptides_inserted += 1
 
         for pair in entity["pairs"]:
+            peptide_binding_start, peptide_binding_stop = require_binding_span(
+                chain=cast(dict[str, object], pair["peptide"]),
+                chain_name="peptide",
+            )
+            receptor_binding_start, receptor_binding_stop = require_binding_span(
+                chain=cast(dict[str, object], pair["receptor"]),
+                chain_name="receptor",
+            )
             insert_pair(
                 connection=connection,
                 pdb_id=entry["pdb_id"],
@@ -286,10 +329,14 @@ def export_entry(
                 peptide_chain_id=pair["peptide"]["chain"],
                 peptide_sequence=pair["peptide"]["sequence"],
                 peptide_residue_names=pair["peptide"]["residue_names"],
+                peptide_binding_start=peptide_binding_start,
+                peptide_binding_stop=peptide_binding_stop,
                 receptor_entity_id=pair["receptor"]["entity_id"],
                 receptor_chain_id=pair["receptor"]["chain"],
                 receptor_sequence=pair["receptor"]["sequence"],
                 receptor_residue_names=pair["receptor"]["residue_names"],
+                receptor_binding_start=receptor_binding_start,
+                receptor_binding_stop=receptor_binding_stop,
             )
             chain_pairs_inserted += 1
 

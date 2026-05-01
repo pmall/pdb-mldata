@@ -27,6 +27,8 @@ Rules:
 
 - Rebuild `entries`, `peptides`, and `chain_pairs`.
 - Keep peptide entities as the only first-class entity table.
+- Store peptide and receptor binding spans in `chain_pairs` for viewer sequence
+  highlighting.
 
 Default parameters:
 
@@ -140,7 +142,8 @@ Default parameters:
 `peptides` stores one row per selected peptide entity from the LMDB.
 
 `chain_pairs` stores one row per selected peptide-chain/receptor-chain pair from
-the LMDB.
+the LMDB. It includes 1-based inclusive peptide and receptor binding spans
+relative to the stored trimmed chain sequences.
 
 `peptides_metadata.accessions_json` stores the accession list reported by RCSB
 for each peptide entity.
