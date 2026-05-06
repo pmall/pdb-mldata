@@ -132,20 +132,20 @@ CREATE TABLE entries_metadata (
 );
 
 CREATE TABLE chain_pairs (
-    chain_pair_id BIGINT PRIMARY KEY,
+    chain_pair_id INTEGER PRIMARY KEY,
     pdb_id TEXT NOT NULL,
     peptide_entity_id TEXT NOT NULL,
     peptide_chain_id TEXT NOT NULL,
     peptide_sequence TEXT NOT NULL,
     peptide_residue_names_json TEXT NOT NULL,
-    peptide_binding_start BIGINT NOT NULL,
-    peptide_binding_stop BIGINT NOT NULL,
+    peptide_binding_start INTEGER NOT NULL,
+    peptide_binding_stop INTEGER NOT NULL,
     receptor_entity_id TEXT NOT NULL,
     receptor_chain_id TEXT NOT NULL,
     receptor_sequence TEXT NOT NULL,
     receptor_residue_names_json TEXT NOT NULL,
-    receptor_binding_start BIGINT NOT NULL,
-    receptor_binding_stop BIGINT NOT NULL,
+    receptor_binding_start INTEGER NOT NULL,
+    receptor_binding_stop INTEGER NOT NULL,
     FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id),
     FOREIGN KEY (pdb_id, peptide_entity_id)
         REFERENCES peptides (pdb_id, entity_id),
@@ -166,7 +166,7 @@ CREATE TABLE peptides_metadata (
     taxonomy_ids_json TEXT NOT NULL,
     accessions_json TEXT NOT NULL,
     polymer_type TEXT NOT NULL,
-    sequence_length BIGINT,
+    sequence_length INTEGER,
     PRIMARY KEY (pdb_id, entity_id),
     FOREIGN KEY (pdb_id, entity_id)
         REFERENCES peptides (pdb_id, entity_id)
@@ -180,18 +180,18 @@ CREATE TABLE targets_metadata (
     taxonomy_ids_json TEXT NOT NULL,
     accessions_json TEXT NOT NULL,
     polymer_type TEXT NOT NULL,
-    sequence_length BIGINT,
+    sequence_length INTEGER,
     PRIMARY KEY (pdb_id, entity_id),
     FOREIGN KEY (pdb_id) REFERENCES entries (pdb_id)
 );
 
 CREATE TABLE uniprot_metadata (
     accession TEXT PRIMARY KEY,
-    reviewed BIGINT NOT NULL,
+    reviewed BOOLEAN NOT NULL,
     recommended_name TEXT NOT NULL,
     gene_names_json TEXT NOT NULL,
     organism_scientific_name TEXT NOT NULL,
-    taxonomy_id BIGINT,
+    taxonomy_id INTEGER,
     function_text TEXT NOT NULL,
     subcellular_locations_json TEXT NOT NULL,
     keywords_json TEXT NOT NULL,
@@ -223,16 +223,16 @@ CREATE TABLE targets_accessions (
 );
 
 CREATE TABLE search_terms (
-    search_term_id BIGINT PRIMARY KEY,
+    search_term_id INTEGER PRIMARY KEY,
     term TEXT NOT NULL,
     term_kind TEXT NOT NULL,
-    rank_weight BIGINT NOT NULL,
+    rank_weight INTEGER NOT NULL,
     UNIQUE (term)
 );
 
 CREATE TABLE search_terms_targets (
-    search_terms_target_id BIGINT PRIMARY KEY,
-    search_term_id BIGINT NOT NULL,
+    search_terms_target_id INTEGER PRIMARY KEY,
+    search_term_id INTEGER NOT NULL,
     pdb_id TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     FOREIGN KEY (search_term_id) REFERENCES search_terms (search_term_id),
