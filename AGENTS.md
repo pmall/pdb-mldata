@@ -149,6 +149,8 @@ The source PDB structure is hierarchical:
 
 - Storage schemas and binary encoding conventions live in `docs/storage_schemas.md`.
 - Shared LMDB encoder and decoder implementations live in `pdb_mldata/lmdb_utils.py`.
+- Structure atom-order constants and structure extraction helpers live in `pdb_mldata/structure_encoding.py`.
+- Pair-admission sequence, neighbor, and receptor-selection rules live in `pdb_mldata/filtering_rules.py`.
 - Detailed script-specific data strategy lives in each script's top module docstring.
 - Broad data-strategy changes must be reflected here; script-specific rule changes must be documented in the owning script docstring before implementation.
 - Schema changes must be documented in `docs/storage_schemas.md` before implementation.

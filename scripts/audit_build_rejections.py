@@ -38,8 +38,6 @@ from pdb_mldata.filtering_rules import (
     build_assembly_atoms,
     build_subchain_entity_map,
     collect_atom_positions,
-    extract_binding_validation_structure,
-    extract_structure,
     is_amino_acid_receptor,
     is_valid_peptide_sequence,
     mark_solvent_neighbors,
@@ -47,6 +45,10 @@ from pdb_mldata.filtering_rules import (
     pair_key,
 )
 from pdb_mldata.lmdb_utils import PairData
+from pdb_mldata.structure_encoding import (
+    extract_binding_validation_structure,
+    extract_structure,
+)
 
 DEFAULT_METADATA_CSV = Path("data/metadata.csv")
 DEFAULT_ASSEMBLIES_ZIP = Path("data/assemblies.zip")

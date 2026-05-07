@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import unittest
-from dataclasses import dataclass
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from typing import cast
+import unittest
 
 import gemmi
 import numpy as np
 
-from pdb_mldata.filtering_rules import (
+from pdb_mldata.structure_encoding import (
     BACKBONE_ATOM_TYPES,
     ATOM_TYPES_37,
     extract_binding_validation_structure,

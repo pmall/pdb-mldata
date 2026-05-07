@@ -11,9 +11,9 @@ Encoding and decoding helpers live in `pdb_mldata/lmdb_utils.py`.
 - Missing coordinates, B-factors, and occupancy values are stored as `NaN`.
 - LMDB structure arrays store 3 backbone atom positions per residue.
 - The backbone atom order is `N`, `CA`, `C`, as defined by
-  `BACKBONE_ATOM_TYPES` in `pdb_mldata/filtering_rules.py`.
+  `BACKBONE_ATOM_TYPES` in `pdb_mldata/structure_encoding.py`.
 - Raw LMDB binding validation uses the 37 AlphaFold atom set defined by
-  `ATOM_TYPES_37` in `pdb_mldata/filtering_rules.py`.
+  `ATOM_TYPES_37` in `pdb_mldata/structure_encoding.py`.
 
 ## Raw LMDB Schema
 
