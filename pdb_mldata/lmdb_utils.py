@@ -177,29 +177,21 @@ def unpack_best_pair_lmdb_entry_for_export(
 
 
 def decode_chain_data(chain_data: ChainData) -> ChainData:
-    """Decode one chain payload back to arrays and restore sentinel NaN values."""
+    """Decode one chain payload back to backbone coordinate arrays."""
     decoded = chain_data.copy()
 
     structure = np.frombuffer(
         cast(bytes, chain_data["structure"]), dtype=np.float16
     ).copy()
-    decoded["structure"] = structure.reshape(-1, 37, 3)
+    decoded["structure"] = structure.reshape(-1, 3, 3)
 
-    b_factors_uint8 = np.frombuffer(
-        cast(bytes, chain_data["b_factors"]), dtype=np.uint8
-    ).reshape(-1, 37)
-    b_factors = b_factors_uint8.astype(np.float32)
-    b_factors[b_factors_uint8 == 255] = np.nan
-    decoded["b_factors"] = b_factors
+    decoded["b_factors"] = np.frombuffer(
+        cast(bytes, chain_data["b_factors"]), dtype=np.float16
+    ).reshape(-1, 3)
 
-    occupancy_uint8 = np.frombuffer(
-        cast(bytes, chain_data["occupancy"]), dtype=np.uint8
-    ).reshape(-1, 37)
-    occupancy = occupancy_uint8.astype(np.float32)
-    is_missing = occupancy_uint8 == 255
-    occupancy = occupancy / 100.0
-    occupancy[is_missing] = np.nan
-    decoded["occupancy"] = occupancy
+    decoded["occupancy"] = np.frombuffer(
+        cast(bytes, chain_data["occupancy"]), dtype=np.float16
+    ).reshape(-1, 3)
 
     return decoded
 

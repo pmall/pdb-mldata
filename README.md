@@ -38,9 +38,14 @@ For each saved chain, the dataset stores:
 
 - The normalized one-letter sequence.
 - Exact retained 3-letter residue names after cap trimming.
-- 37 atom positions per residue in the AlphaFold atom order.
-- Per-atom B-factors.
-- Per-atom occupancy values.
+- Backbone atom coordinates for `N`, `CA`, and `C`.
+- Backbone atom B-factors.
+- Backbone atom occupancy values.
+- Binding interface spans and contact metrics.
+
+Pair admission uses full-atom contact validation during LMDB construction. The
+persisted structural arrays are backbone-only because downstream models consume
+the backbone representation.
 
 Non-standard amino acids are retained. When Gemmi cannot convert a residue to a
 one-letter amino-acid code, the normalized sequence uses `X`, while the exact
@@ -80,7 +85,12 @@ LMDB keys are PDB IDs. Values are `msgpack` payloads with this structure:
             "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
+            "occupancy": "<bytes>",
+            "interface_start": 1,
+            "interface_end": 1,
+            "contact_residues": 0,
+            "contact_fraction": 0.0,
+            "mean_contact_atom_b_factor": 0.0
           },
           "receptor": {
             "entity_id": "",
@@ -89,7 +99,10 @@ LMDB keys are PDB IDs. Values are `msgpack` payloads with this structure:
             "residue_names": [],
             "structure": "<bytes>",
             "b_factors": "<bytes>",
-            "occupancy": "<bytes>"
+            "occupancy": "<bytes>",
+            "interface_start": 1,
+            "interface_end": 1,
+            "contact_residues": 0
           }
         }
       ]
@@ -100,19 +113,22 @@ LMDB keys are PDB IDs. Values are `msgpack` payloads with this structure:
 
 Binary array conventions:
 
-- `structure`: `float16 [N, 37, 3]`, serialized with `.tobytes()`.
-- `b_factors`: `uint8 [N, 37]`, serialized with `.tobytes()`.
-- `occupancy`: `uint8 [N, 37]`, occupancy multiplied by 100 before storage.
-- `255`: missing-value sentinel for `uint8` quality arrays.
+- `structure`: `float16 [N, 3, 3]`, serialized with `.tobytes()` in `N`, `CA`,
+  `C` atom order.
+- `b_factors`: `float16 [N, 3]`, serialized with `.tobytes()` in `N`, `CA`, `C`
+  atom order.
+- `occupancy`: `float16 [N, 3]`, serialized with `.tobytes()` in `N`, `CA`, `C`
+  atom order.
+- Missing coordinate, B-factor, and occupancy values are stored as `NaN`.
 
 The shared LMDB utilities define the encoding and decoding conventions so that
 the structural byte arrays can be restored as typed coordinate, B-factor, and
-occupancy arrays.
+occupancy arrays. Full schema details live in `docs/storage_schemas.md`.
 
 ## Viewer Database
 
 The viewer database is a derived sidecar artifact for search and publication. It
-projects selected LMDB metadata into relational tables, enriches entries and
+projects LMDB metadata into relational tables, enriches entries and
 entities with RCSB and UniProt metadata, and derives target-focused search terms
 for autocomplete and trigram lookup.
 

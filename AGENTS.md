@@ -78,6 +78,7 @@ At the end of every coding session:
 - Run `uv run ruff check --fix`.
 - Run `uv run pyright`.
 - Run `uv run python -m compileall -q scripts`.
+- Run relevant tests when adding tests or changing behavior covered by tests.
 - Check the diff and confirm it contains only intentional changes.
 
 For data-processing or pipeline script verification:
@@ -135,6 +136,8 @@ This project builds an exhaustive repository of peptide/receptor pairs from the 
 A peptide is a protein entity with length between 4 and 32 amino acids after trimming usual N-terminal and C-terminal caps. Peptide sequences must contain at least 4 standard amino acids from `ACDEFGHIKLMNPQRSTVWY` and must contain at most 20 percent non-standard one-letter residue codes. Observed peptide chains must pass the same length and sequence-content rules after cap trimming to be stored as peptide/receptor pairs.
 
 A receptor is another protein entity within 5 Angstroms of the peptide entity, with length at least 50 amino acids after trimming usual N-terminal and C-terminal caps. It must be the only other meaningful chain in the peptide neighborhood. Meaningless ligand chains, such as water and the ligand chains defined in the LMDB-building script, do not count as receptor neighbors. Protein chains shorter than the receptor minimum still count as meaningful neighborhood chains, but they cannot be selected as valid receptors. A stored pair must also pass the binding-contact rule: at least 4 peptide residues and at least half of peptide residues must contact the receptor through qualifying peptide atoms.
+
+Binding validation uses the full 37 AlphaFold-style atom set for contact detection during raw LMDB construction. Stored LMDB chain structures contain only the N, CA, and C backbone atoms, with matching B-factor and occupancy arrays.
 
 The source PDB structure is hierarchical:
 

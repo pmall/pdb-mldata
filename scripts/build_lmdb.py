@@ -45,8 +45,9 @@ Structure rules:
 - Entity sequences represent ideal PDB entity sequences.
 - Chain sequences and structures represent observed assembly chains.
 - Structures are trimmed with their observed chain sequences.
-- Structure arrays store 37 AlphaFold atom positions; extra atoms on
-  non-standard amino acids are discarded.
+- Build-time binding validation uses the 37 AlphaFold atom positions so pair
+  admission stays independent of the reduced storage format.
+- Stored structure arrays keep only N, CA, and C backbone atom positions.
 
 Output behavior:
 - Delete an existing output LMDB folder before writing to avoid LMDB upsert

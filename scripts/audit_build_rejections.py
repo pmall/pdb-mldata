@@ -38,6 +38,7 @@ from pdb_mldata.filtering_rules import (
     build_assembly_atoms,
     build_subchain_entity_map,
     collect_atom_positions,
+    extract_binding_validation_structure,
     extract_structure,
     is_amino_acid_receptor,
     is_valid_peptide_sequence,
@@ -45,7 +46,7 @@ from pdb_mldata.filtering_rules import (
     normalize_residue_names,
     pair_key,
 )
-from pdb_mldata.lmdb_utils import PairData, decode_chain_data
+from pdb_mldata.lmdb_utils import PairData
 
 DEFAULT_METADATA_CSV = Path("data/metadata.csv")
 DEFAULT_ASSEMBLIES_ZIP = Path("data/assemblies.zip")
@@ -546,6 +547,12 @@ def audit_assembly(
             receptor_structure, receptor_b, receptor_occ = extract_structure(
                 trimmed_receptor_residues
             )
+            validation_peptide_structure, validation_peptide_b = (
+                extract_binding_validation_structure(peptide_residues)
+            )
+            validation_receptor_structure, validation_receptor_b = (
+                extract_binding_validation_structure(trimmed_receptor_residues)
+            )
             pair: PairData = {
                 "peptide": {
                     "entity_id": entity.name,
@@ -566,9 +573,21 @@ def audit_assembly(
                     "occupancy": receptor_occ,
                 },
             }
+            validation_pair: PairData = {
+                "peptide": {
+                    **pair["peptide"],
+                    "structure": validation_peptide_structure,
+                    "b_factors": validation_peptide_b,
+                },
+                "receptor": {
+                    **pair["receptor"],
+                    "structure": validation_receptor_structure,
+                    "b_factors": validation_receptor_b,
+                },
+            }
             interface_metrics = calculate_binding_interface_metrics(
-                peptide=decode_chain_data(pair["peptide"]),
-                receptor=decode_chain_data(pair["receptor"]),
+                peptide=validation_pair["peptide"],
+                receptor=validation_pair["receptor"],
                 distance=binding_filter.distance,
                 max_contact_atom_b_factor=binding_filter.max_contact_atom_b_factor,
             )

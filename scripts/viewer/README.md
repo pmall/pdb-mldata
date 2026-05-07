@@ -29,6 +29,8 @@ Rules:
 - Keep peptide entities as the only first-class entity table.
 - Store peptide and receptor binding spans in `chain_pairs` for viewer sequence
   highlighting.
+- Read LMDB metadata, sequences, residue names, and binding spans; structural
+  byte arrays are not exported to SQLite.
 
 Default parameters:
 

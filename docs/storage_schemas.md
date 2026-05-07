@@ -6,12 +6,14 @@ Encoding and decoding helpers live in `pdb_mldata/lmdb_utils.py`.
 ## Binary Array Conventions
 
 - Structure coordinates are stored as `float16` bytes from NumPy `.tobytes()`.
-- B-factors are stored as `uint8` bytes.
-- Occupancy values are multiplied by 100 and stored as `uint8` bytes.
-- The `uint8` value `255` is the missing-value sentinel for B-factor and occupancy arrays.
-- Raw LMDB stores 37 AlphaFold atom positions per residue.
-- The 37-atom order is defined by `ATOM_TYPES_37` in
-  `pdb_mldata/filtering_rules.py`.
+- B-factors are stored as `float16` bytes from NumPy `.tobytes()`.
+- Occupancy values are stored as `float16` bytes from NumPy `.tobytes()`.
+- Missing coordinates, B-factors, and occupancy values are stored as `NaN`.
+- LMDB structure arrays store 3 backbone atom positions per residue.
+- The backbone atom order is `N`, `CA`, `C`, as defined by
+  `BACKBONE_ATOM_TYPES` in `pdb_mldata/filtering_rules.py`.
+- Raw LMDB binding validation uses the 37 AlphaFold atom set defined by
+  `ATOM_TYPES_37` in `pdb_mldata/filtering_rules.py`.
 
 ## Raw LMDB Schema
 
@@ -71,9 +73,9 @@ Schema notes:
 - Entity-level `sequence` and `residue_names`: ideal peptide entity sequence after cap trimming.
 - `pairs`: observed peptide-chain/receptor-chain pairs under that peptide entity.
 - Chain-level `sequence` and `residue_names`: observed chain sequence after cap trimming.
-- `structure`: `float16 [N, 37, 3]`.
-- `b_factors`: `uint8 [N, 37]`, with `255` as missing.
-- `occupancy`: `uint8 [N, 37]`, with `255` as missing.
+- `structure`: `float16 [N, 3, 3]`, in `N`, `CA`, `C` atom order.
+- `b_factors`: `float16 [N, 3]`, in `N`, `CA`, `C` atom order.
+- `occupancy`: `float16 [N, 3]`, in `N`, `CA`, `C` atom order.
 - `interface_start` and `interface_end`: 1-based inclusive residue positions
   relative to the trimmed observed chain sequence.
 - `contact_residues`: number of residues in that chain contacting the other
@@ -143,9 +145,9 @@ Schema notes:
 - `entity`: ideal peptide entity sequence and residue names after cap trimming.
 - `peptide`: selected observed peptide chain.
 - `receptor`: selected observed receptor chain.
-- `structure`: `float16 [N, 37, 3]`.
-- `b_factors`: `uint8 [N, 37]`, with `255` as missing.
-- `occupancy`: `uint8 [N, 37]`, with `255` as missing.
+- `structure`: `float16 [N, 3, 3]`, in `N`, `CA`, `C` atom order.
+- `b_factors`: `float16 [N, 3]`, in `N`, `CA`, `C` atom order.
+- `occupancy`: `float16 [N, 3]`, in `N`, `CA`, `C` atom order.
 - Interface fields have the same meaning as in the raw LMDB schema.
 
 Helpers:

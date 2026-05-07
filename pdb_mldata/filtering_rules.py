@@ -13,7 +13,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from pdb_mldata.curation import BindingFilter, calculate_binding_interface_metrics
-from pdb_mldata.lmdb_utils import EntityData, LmdbEntry, PairData, decode_chain_data
+from pdb_mldata.lmdb_utils import EntityData, LmdbEntry, PairData
 
 
 class NeighborRecord(TypedDict):
@@ -79,6 +79,7 @@ ATOM_TYPES_37 = (
     "NZ",
     "OXT",
 )
+BACKBONE_ATOM_TYPES = ("N", "CA", "C")
 PEPTIDE_POLYMER_TYPES = (gemmi.PolymerType.PeptideL, gemmi.PolymerType.PeptideD)
 STANDARD_AMINO_ACID_CODES = frozenset("ACDEFGHIKLMNPQRSTVWY")
 
@@ -270,15 +271,49 @@ def is_valid_peptide_sequence(
 def extract_structure(
     residues: Sequence[gemmi.Residue],
 ) -> tuple[bytes, bytes, bytes]:
-    """Extract 37-atom coordinates plus residue-level B-factor and occupancy as bytes."""
+    """Extract persisted backbone coordinates, B-factors, and occupancy as bytes."""
     coords = []
     b_factors = []
     occupancy = []
 
     for residue in residues:
+        atom_coords = [[np.nan, np.nan, np.nan] for _ in BACKBONE_ATOM_TYPES]
+        atom_b = [np.nan] * len(BACKBONE_ATOM_TYPES)
+        atom_occ = [np.nan] * len(BACKBONE_ATOM_TYPES)
+
+        for atom in residue:
+            if atom.name not in BACKBONE_ATOM_TYPES:
+                continue
+            atom_index = BACKBONE_ATOM_TYPES.index(atom.name)
+            atom_coords[atom_index] = [atom.pos.x, atom.pos.y, atom.pos.z]
+
+            if atom.b_iso is not None:
+                atom_b[atom_index] = atom.b_iso
+
+            if atom.occ is not None:
+                atom_occ[atom_index] = atom.occ
+
+        coords.append(atom_coords)
+        b_factors.append(atom_b)
+        occupancy.append(atom_occ)
+
+    coords_arr = np.asarray(coords, dtype=np.float16)
+    b_factors_arr = np.asarray(b_factors, dtype=np.float16)
+    occupancy_arr = np.asarray(occupancy, dtype=np.float16)
+
+    return coords_arr.tobytes(), b_factors_arr.tobytes(), occupancy_arr.tobytes()
+
+
+def extract_binding_validation_structure(
+    residues: Sequence[gemmi.Residue],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract the legacy contact tensor used only for build-time validation."""
+    coords = []
+    b_factors = []
+
+    for residue in residues:
         atom_coords = [[np.nan, np.nan, np.nan] for _ in ATOM_TYPES_37]
         atom_b = [255] * len(ATOM_TYPES_37)
-        atom_occ = [255] * len(ATOM_TYPES_37)
 
         for atom in residue:
             if atom.name not in ATOM_TYPES_37:
@@ -287,22 +322,19 @@ def extract_structure(
             atom_coords[atom_index] = [atom.pos.x, atom.pos.y, atom.pos.z]
 
             if atom.b_iso is not None:
-                b_val = min(max(0, round(atom.b_iso)), 254) if atom.b_iso >= 0 else 0
-                atom_b[atom_index] = b_val
-
-            if atom.occ is not None:
-                occ_val = min(max(0, round(atom.occ * 100)), 100)
-                atom_occ[atom_index] = occ_val
+                atom_b[atom_index] = (
+                    min(max(0, round(atom.b_iso)), 254) if atom.b_iso >= 0 else 0
+                )
 
         coords.append(atom_coords)
         b_factors.append(atom_b)
-        occupancy.append(atom_occ)
 
     coords_arr = np.asarray(coords, dtype=np.float16)
-    b_factors_arr = np.asarray(b_factors, dtype=np.uint8)
-    occupancy_arr = np.asarray(occupancy, dtype=np.uint8)
+    b_factors_uint8 = np.asarray(b_factors, dtype=np.uint8)
+    b_factors_arr = b_factors_uint8.astype(np.float32)
+    b_factors_arr[b_factors_uint8 == 255] = np.nan
 
-    return coords_arr.tobytes(), b_factors_arr.tobytes(), occupancy_arr.tobytes()
+    return coords_arr, b_factors_arr
 
 
 def collect_atom_positions(residues: Sequence[gemmi.Residue]) -> np.ndarray:
@@ -586,6 +618,12 @@ def process_assembly(
             receptor_structure, receptor_b, receptor_occ = extract_structure(
                 trimmed_receptor_residues
             )
+            validation_peptide_structure, validation_peptide_b = (
+                extract_binding_validation_structure(peptide_residues)
+            )
+            validation_receptor_structure, validation_receptor_b = (
+                extract_binding_validation_structure(trimmed_receptor_residues)
+            )
 
             pair: PairData = {
                 "peptide": {
@@ -607,9 +645,21 @@ def process_assembly(
                     "occupancy": receptor_occ,
                 },
             }
+            validation_pair: PairData = {
+                "peptide": {
+                    **pair["peptide"],
+                    "structure": validation_peptide_structure,
+                    "b_factors": validation_peptide_b,
+                },
+                "receptor": {
+                    **pair["receptor"],
+                    "structure": validation_receptor_structure,
+                    "b_factors": validation_receptor_b,
+                },
+            }
             interface_metrics = calculate_binding_interface_metrics(
-                peptide=decode_chain_data(pair["peptide"]),
-                receptor=decode_chain_data(pair["receptor"]),
+                peptide=validation_pair["peptide"],
+                receptor=validation_pair["receptor"],
                 distance=binding_filter.distance,
                 max_contact_atom_b_factor=binding_filter.max_contact_atom_b_factor,
             )
